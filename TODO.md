@@ -117,9 +117,11 @@ chemin de code ne permet à l'IA de contourner cette règle.
 
 ### ✅ T2 — Configuration et secrets — FAIT
 - `settings.py` opérationnel, échoue explicitement si un secret manque (vérifié).
-- `config/sources.yaml` : **Soompi + Yonhap Culture actifs ; allkpop présent mais désactivé**
-  (flux RSS retiré par le site, confirmé par des 404 sur 4 URLs candidates — aucun correctif
-  code applicable ; voir discussion Google News/RSS tiers, écartée pour l'instant).
+- `config/sources.yaml` : **Soompi + Yonhap Culture + Koreaboo actifs ; allkpop présent mais
+  désactivé** (flux RSS retiré par le site, confirmé par des 404 sur 4 URLs candidates —
+  aucun correctif code applicable ; Google News/RSS tiers écartés, voir discussion). Koreaboo
+  remplace allkpop et comble un vrai vide : Soompi/Yonhap Culture ne couvrent quasiment aucun
+  contenu scandale/gossip (vérifié sur 20 titres de chaque, zéro `SCANDALE_DRAMA`).
 - `config/artist_tiers.yaml` : table de départ en place.
 - `.env` réel créé par l'utilisateur avec les vraies clés — testé en conditions réelles.
 
@@ -347,7 +349,7 @@ semaine écoulée et 10 liens corrects vers les articles les plus importants env
 
 | # | Sujet | Décision |
 |---|---|---|
-| 1 | Sources RSS | **Soompi + Yonhap Culture** actifs. **allkpop désactivé** — son flux RSS n'existe plus (404 confirmé sur 4 URLs candidates, refonte du site), pas de correctif applicable côté code. À remplacer par une autre source si le volume Route B doit être renforcé |
+| 1 | Sources RSS | **Soompi + Yonhap Culture + Koreaboo** actifs. **allkpop désactivé** — son flux RSS n'existe plus (404 confirmé sur 4 URLs candidates, refonte du site), pas de correctif applicable côté code ; remplacé par Koreaboo, qui comble en plus un vide constaté sur le contenu scandale/gossip |
 | 2 | Cadence du cron | **Fixée à 15 min** (GitHub Actions) |
 | 3 | Filet mots-clés France | **Règle dure, hardcodée**, avant l'appel IA + réécriture forcée après coup. Mots-clés : `Paris`, `France`, `Accor Arena`, `Stade de France`, `Zénith` |
 | 4 | Volume attendu | **~150 articles/jour en production** ; `--limit 5` pour les tests actuels |

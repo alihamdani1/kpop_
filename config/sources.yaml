@@ -20,7 +20,16 @@ sources:
     # Le 403 n'était PAS un filtre anti-bot : la vraie cause est un flux RSS retiré lors
     # d'une refonte du site (confirmé — /feed, /rss, /feed/rss, /rss.xml renvoient tous
     # 404, pas 403, avec le User-Agent navigateur). Le correctif User-Agent de fetcher.py
-    # n'y change rien, logiquement. Laissé inactif tant qu'aucun flux de remplacement n'est
-    # trouvé. Vérifié manuellement le 24/07/2026.
+    # n'y change rien, logiquement. Remplacé par Koreaboo (voir ci-dessous). Laissé en
+    # config, désactivé, pour tracer ce qui a été essayé. Vérifié manuellement le 24/07/2026.
     url: https://www.allkpop.com/rss.xml
     active: false
+
+  - name: Koreaboo
+    # Remplaçant d'allkpop — flux vérifié fonctionnel. Contrairement à Soompi/Yonhap Culture
+    # (qui ne couvrent quasi aucun scandale/gossip — vérifié sur 20 titres de chaque, zéro
+    # contenu SCANDALE_DRAMA), Koreaboo comble ce vide : rumeurs, controverses, débats sur
+    # les réseaux. Ton plus tabloïd — une partie sera à bon droit filtrée en BRUIT_INUTILE
+    # par le classificateur, c'est attendu. Vérifié manuellement le 24/07/2026.
+    url: https://www.koreaboo.com/feed/
+    active: true
