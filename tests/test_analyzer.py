@@ -69,6 +69,17 @@ def gemini(monkeypatch):
     return instance
 
 
+@pytest.fixture
+def gemini_with_fallback(monkeypatch):
+    instance = analyzer.GeminiAnalyzer(
+        api_key="test-key",
+        model="gemini-3.1-flash-lite",
+        fallback_model="gemini-3.6-flash",
+        artist_tiers={"tier_1": ["BTS"], "tier_2": ["Groupe X"]},
+    )
+    return instance
+
+
 def test_classify_happy_path(gemini, monkeypatch, make_article):
     payload = {
         "category": "COMEBACK_SORTIE",
@@ -105,12 +116,48 @@ def test_classify_filet_france_ecrase_la_categorie_du_modele(gemini, monkeypatch
 
 
 def test_classify_quota_depasse_leve_quota_exceeded(gemini, monkeypatch, make_article):
+    """Sans modèle de secours configuré (fallback_model=None), l'erreur remonte directement —
+    comportement inchangé, c'est le filet de sécurité du cycle qui prend le relais."""
+
     def _raise(**kwargs):
         raise errors.APIError(code=429, response_json={"error": {"message": "quota exceeded"}})
 
     monkeypatch.setattr(gemini._client.models, "generate_content", _raise)
     with pytest.raises(analyzer.QuotaExceededError):
         gemini.classify(make_article(), france_flag=False)
+
+
+def test_classify_bascule_sur_le_secours_apres_429(gemini_with_fallback, monkeypatch, make_article):
+    calls = []
+
+    def _generate_content(*, model, **kwargs):
+        calls.append(model)
+        if model == "gemini-3.1-flash-lite":  # modèle principal — en échec
+            raise errors.APIError(code=429, response_json={"error": {"message": "quota"}})
+        return _FakeResponse(  # modèle de secours — répond normalement
+            {
+                "category": "COMEBACK_SORTIE",
+                "importance": "MAJEUR",
+                "virality": "ELEVE",
+                "virality_reason": "Test.",
+                "artists": [],
+            }
+        )
+
+    monkeypatch.setattr(gemini_with_fallback._client.models, "generate_content", _generate_content)
+    result, _, _ = gemini_with_fallback.classify(make_article(), france_flag=False)
+
+    assert calls == ["gemini-3.1-flash-lite", "gemini-3.6-flash"]  # principal essayé d'abord
+    assert result.category == Category.COMEBACK_SORTIE
+
+
+def test_classify_leve_si_le_secours_echoue_aussi(gemini_with_fallback, monkeypatch, make_article):
+    def _raise(**kwargs):
+        raise errors.APIError(code=429, response_json={"error": {"message": "quota"}})
+
+    monkeypatch.setattr(gemini_with_fallback._client.models, "generate_content", _raise)
+    with pytest.raises(analyzer.QuotaExceededError):
+        gemini_with_fallback.classify(make_article(), france_flag=False)
 
 
 def test_classify_reponse_invalide_leve_analysis_error(gemini, monkeypatch, make_article):

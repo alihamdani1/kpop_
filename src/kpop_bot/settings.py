@@ -17,9 +17,14 @@ class Settings(BaseSettings):
     discord_webhook_route_b: str  # #drafts-twitter — volume quotidien
 
     # --- Paramètres avec valeur par défaut raisonnable, ajustables sans toucher au code. ---
-    # gemini-3.1-flash-lite : plus de marge en RPM (15 vs ~10 sur gemini-3.6-flash) pour la
-    # phase de test. Le choix définitif pour la production sera tranché par T5bis.
-    gemini_model: str = "gemini-3.1-flash-lite"
+    # gemini-3.5-flash-lite : 15 RPM / 1500 RPD gratuits, GA. Le choix définitif pour la
+    # production sera tranché par T5bis.
+    gemini_model: str = "gemini-3.5-flash-lite"
+    # Modèle de secours : quota (RPM/RPD) totalement indépendant du modèle principal, même
+    # clé API. N'intervient qu'après un 429 sur gemini_model — voir analyzer.py
+    # `_generate_with_fallback`. gemini-3.1-flash-lite est déjà validé en conditions réelles
+    # (voir T5), donc un choix de secours "connu et fiable" plutôt qu'une inconnue.
+    gemini_fallback_model: str = "gemini-3.1-flash-lite"
     db_path: Path = Path("data/kpop.db")
     sources_path: Path = Path("config/sources.yaml")
     artist_tiers_path: Path = Path("config/artist_tiers.yaml")

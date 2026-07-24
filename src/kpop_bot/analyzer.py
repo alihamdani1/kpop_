@@ -125,9 +125,17 @@ class GeminiAnalyzer:
     """Implémentation Gemini de l'analyse. Le reste du pipeline ne dépend que de `classify()`
     et `write()` — basculer vers un autre fournisseur (ex. Groq) n'impacte que cette classe."""
 
-    def __init__(self, *, api_key: str, model: str, artist_tiers: dict[str, list[str]]) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        artist_tiers: dict[str, list[str]],
+        fallback_model: str | None = None,
+    ) -> None:
         self._client = genai.Client(api_key=api_key)
         self._model = model
+        self._fallback_model = fallback_model
         self._artist_tiers_text = _format_artist_tiers(artist_tiers)
 
     def classify(
@@ -138,7 +146,7 @@ class GeminiAnalyzer:
             france_note=_FRANCE_NOTE if france_flag else "",
         )
         user_content = f"Source : {item.source}\nTitre : {item.title}\nExtrait : {item.raw_summary}"
-        result, tokens_in, tokens_out = self._generate(
+        result, tokens_in, tokens_out = self._generate_with_fallback(
             system_prompt, user_content, ClassificationResult
         )
 
@@ -166,14 +174,34 @@ class GeminiAnalyzer:
             video_instruction=_VIDEO_INSTRUCTION if route == Route.A else "",
         )
         user_content = f"Titre : {item.title}\nExtrait : {item.raw_summary}\nLien : {item.url}"
-        return self._generate(system_prompt, user_content, WritingResult)
+        return self._generate_with_fallback(system_prompt, user_content, WritingResult)
+
+    def _generate_with_fallback(
+        self, system_prompt: str, user_content: str, schema: type[_T]
+    ) -> tuple[_T, int, int]:
+        """Essaie le modèle principal ; sur 429 uniquement, retente une fois sur le modèle de
+        secours (quota indépendant — même clé API, même fournisseur, donc même format de
+        prompt et même niveau de confiance qualité). Si le secours échoue aussi, l'erreur
+        remonte normalement : le filet de sécurité existant (article repris au cycle suivant,
+        voir pipeline.py) reste la dernière protection."""
+        try:
+            return self._generate(self._model, system_prompt, user_content, schema)
+        except QuotaExceededError:
+            if not self._fallback_model:
+                raise
+            logger.warning(
+                "Quota atteint sur %s — bascule sur le modèle de secours %s.",
+                self._model,
+                self._fallback_model,
+            )
+            return self._generate(self._fallback_model, system_prompt, user_content, schema)
 
     def _generate(
-        self, system_prompt: str, user_content: str, schema: type[_T]
+        self, model: str, system_prompt: str, user_content: str, schema: type[_T]
     ) -> tuple[_T, int, int]:
         try:
             response = self._client.models.generate_content(
-                model=self._model,
+                model=model,
                 contents=user_content,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,

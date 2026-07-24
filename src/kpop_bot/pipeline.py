@@ -60,6 +60,7 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
         api_key=settings.gemini_api_key,
         model=settings.gemini_model,
         artist_tiers=artist_tiers,
+        fallback_model=settings.gemini_fallback_model,
     )
 
     pending_new = storage.pending(conn, ArticleStatus.NEW, limit=limit)

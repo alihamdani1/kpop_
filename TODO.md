@@ -2,11 +2,12 @@
 
 > Statut : **socle + cœur métier fonctionnels, testés (54 tests) et validés en conditions
 > réelles (vrais appels Gemini, vrais messages Discord reçus et vérifiés sur mobile).**
-> Il reste principalement le déploiement autonome (T10) pour que le pipeline tourne sans
-> intervention manuelle. Chaque tâche est autonome, testable, et livrable dans l'ordre indiqué.
+> Le déploiement autonome (T10) est fait et validé : le pipeline tourne désormais seul sur
+> GitHub Actions, toutes les 15 min, sans intervention manuelle. Chaque tâche est autonome,
+> testable, et livrable dans l'ordre indiqué.
 >
 > **Architecture retenue (v3)** : hébergement 100 % gratuit (GitHub Actions, dépôt public),
-> fournisseur LLM **Gemini Flash** (`gemini-3.1-flash-lite` en phase de test), routage à **deux salons Discord**
+> fournisseur LLM **Gemini Flash** (`gemini-3.5-flash-lite` en phase de test), routage à **deux salons Discord**
 > (`#actus-videos` / `#drafts-twitter`) piloté par le score de viralité, brouillon de tweet
 > généré pour tout article retenu. Aucune intégration directe à l'API X — publication 100 %
 > humaine (« human-in-the-loop »).
@@ -23,8 +24,9 @@
 | **Client HTTP** | `httpx` | Timeouts explicites, retries, API moderne |
 | **Base de données** | **SQLite**, fichier versionné dans le dépôt | Un seul fichier, zéro serveur. Les runners GitHub Actions sont jetables : la base doit être **recommise dans le dépôt** à la fin de chaque exécution pour survivre au cycle suivant (voir T3) |
 | **Hébergement / ordonnancement** | **GitHub Actions**, cron fixé à **15 min**, dépôt public | Minutes illimitées et gratuites sur dépôt public. Aucune machine à faire tourner. Limite assumée : timing approximatif |
-| **Fournisseur LLM** | **Google Gemini** (`gemini-3.1-flash-lite`, configurable), tier gratuit — derrière une interface interchangeable | Choisi pour la phase de test : 15 RPM / 1500 RPD gratuits, plus de marge que `gemini-3.6-flash` (~10 RPM) qui avait déclenché un 429 dès 6-7 appels rapprochés. Volume calibré (~150 art./jour en prod, voir point 4) très sous le plafond gratuit dans les deux cas. SDK `google-genai`, sortie contrainte nativement via `response_schema` (Pydantic). Choix définitif pour la production à confirmer par T5bis |
-| **Fournisseur LLM de secours** | Groq, tier gratuit (14 400 req/jour) | Bascule documentée si les quotas Gemini deviennent trop justes ou si T5bis montre un net avantage qualité |
+| **Fournisseur LLM** | **Google Gemini** (`gemini-3.5-flash-lite`, configurable), tier gratuit — derrière une interface interchangeable | Choisi pour la phase de test : 15 RPM / 1500 RPD gratuits (GA depuis le 21/07/2026). Volume calibré (~150 art./jour en prod, voir point 4) très sous le plafond gratuit. SDK `google-genai`, sortie contrainte nativement via `response_schema` (Pydantic). Choix définitif pour la production à confirmer par T5bis |
+| **Modèle de secours (quota)** | **`gemini-3.1-flash-lite`**, implémenté (T5ter) — bascule automatique sur 429 | Quota RPM/RPD indépendant du modèle principal, même clé/SDK/prompt : zéro risque qualité non validée, contrairement à un vrai fournisseur tiers. Déjà validé en conditions réelles (précédent modèle principal) — secours "connu", pas une inconnue |
+| **Fournisseur LLM alternatif (non retenu comme fallback)** | Groq documenté, jamais implémenté | Écarté comme fallback automatique tant que T5bis n'a pas validé sa qualité éditoriale — resterait une option de bascule manuelle si Gemini devenait indisponible |
 | **Format de sortie IA** | Sortie contrainte par **schéma JSON** (`response_schema`) + validation Pydantic | Le modèle est empêché de produire une catégorie hors énumération, un JSON mal formé, ou un tweet trop long (`max_length=280` validé côté code) |
 | **Validation / config** | `pydantic` v2 + `pydantic-settings` | Un seul outil pour le schéma IA, la config et les variables d'environnement |
 | **Fichier de sources** | `YAML` (`PyYAML`) | Lisible et éditable par un non-développeur de la rédaction |
@@ -47,7 +49,7 @@ kpop_news_bot/
 │   └── workflows/
 │       └── pipeline.yml         # cron 15 min + déclenchement manuel (workflow_dispatch)
 ├── config/
-│   ├── sources.yaml             # flux RSS actifs (dev : Soompi seul pour l'instant)
+│   ├── sources.yaml             # flux RSS actifs (Soompi + Yonhap Culture)
 │   └── artist_tiers.yaml        # table Tier 1/2/3… injectée dans le prompt système
 ├── src/kpop_bot/
 │   ├── __main__.py              # point d'entrée / CLI
@@ -110,8 +112,7 @@ chemin de code ne permet à l'IA de contourner cette règle.
 
 ### ✅ T1 — Initialisation du projet — FAIT
 - Arborescence, `pyproject.toml`, `.gitignore`, venv, dépendances installées, `ruff` configuré.
-- `git init` + commit local fait. **Le push vers un dépôt GitHub public n'a pas encore été
-  fait** — reporté à T10, comme prévu.
+- `git init`, commit local, **dépôt GitHub public créé et poussé** (`alihamdani1/kpop_`).
 - **Fait quand** : `python -m kpop_bot --help` s'exécute sans erreur. ✔️ Vérifié.
 
 ### ✅ T2 — Configuration et secrets — FAIT
@@ -122,11 +123,12 @@ chemin de code ne permet à l'IA de contourner cette règle.
 - `config/artist_tiers.yaml` : table de départ en place.
 - `.env` réel créé par l'utilisateur avec les vraies clés — testé en conditions réelles.
 
-### ✅ T3 — Couche de persistance (SQLite versionnée) — FAIT (localement)
+### ✅ T3 — Couche de persistance (SQLite versionnée) — FAIT
 - Schéma complet en place (`route`, `tweet_draft`, `video_summary`, `france_override` inclus),
   tests unitaires au vert.
-- **`data/kpop.db` existe déjà (données réelles) mais n'est pas encore suivi par git** — le
-  mécanisme de recommit automatique dans le dépôt reste à construire, dans T10.
+- `data/kpop.db` est suivie par git et **recommise automatiquement par le workflow GitHub
+  Actions** à chaque cycle où elle change (confirmé — commit `github-actions[bot]` observé
+  sur `origin/main`).
 
 ### ✅ T4 — Collecte RSS — FAIT, durci au-delà du plan initial
 - Testé en conditions réelles sur Soompi (60 items) et Yonhap Culture (48 items, après
@@ -179,9 +181,35 @@ conclusion est réappliquée en dur après coup, indépendamment de la réponse 
   serveur → retry ; réponse invalide (schéma, tweet trop long) → article en `FAILED`, pipeline
   poursuivi.
 - Enregistrement des tokens consommés par article et par appel.
-- **✅ FAIT — validé en conditions réelles** : appels Gemini réels effectués (`gemini-3.1-flash-lite`),
-  classifications cohérentes, résumés en français, brouillons de tweet générés. Le 429 rencontré
-  en test était un plafond RPM normal, correctement géré (cycle arrêté proprement, repris ensuite).
+- **✅ FAIT — validé en conditions réelles** : appels Gemini réels effectués (alors sur
+  `gemini-3.1-flash-lite`, modèle principal à l'époque du test — voir T5ter pour le changement
+  de modèle depuis), classifications cohérentes, résumés en français, brouillons de tweet
+  générés. Le 429 rencontré en test était un plafond RPM normal, correctement géré (cycle
+  arrêté proprement, repris ensuite).
+
+### ✅ T5ter — Modèle de secours Gemini (fallback quota) — FAIT
+- **Décision** : un second modèle **Gemini** (pas Groq) — même clé API, même SDK, même format
+  de prompt, quota RPM/RPD totalement indépendant du modèle principal. Choisi plutôt qu'un
+  fournisseur tiers pour ne pas introduire une qualité éditoriale non validée (Groq n'a jamais
+  été testé sur notre tâche — c'est justement l'objet de T5bis, toujours pas fait).
+- `analyzer.py` : `_generate_with_fallback()` essaie `gemini_model` (principal), et
+  **uniquement sur 429** retente une fois avec `gemini_fallback_model`. Toute autre erreur, ou
+  un second 429 sur le modèle de secours, remonte normalement — le filet de sécurité existant
+  (article repris au cycle suivant) reste la dernière protection.
+- `classify()` et `write()` en bénéficient tous les deux.
+- Modèle de secours retenu : `gemini-3.1-flash-lite` — c'était le modèle principal jusqu'au
+  changement décrit ci-dessus, donc déjà validé en conditions réelles (voir T5). Un secours
+  "connu et fiable" plutôt qu'une inconnue.
+- **Mise à jour** : modèle principal passé à `gemini-3.5-flash-lite` (GA le 21/07/2026, même
+  palier gratuit 15 RPM / 1500 RPD), `gemini-3.1-flash-lite` conservé comme secours pour la
+  raison ci-dessus. Changement de config pure (`settings.py`), aucun impact sur le mécanisme
+  de bascule lui-même.
+- Nouveau réglage `gemini_fallback_model` dans `settings.py` / `.env.example` — ajustable sans
+  toucher au code, comme `gemini_model`.
+- Bascule journalisée en `WARNING`, visible dans les logs GitHub Actions (T8).
+- **Fait quand** : test simulé confirmant la bascule (429 sur le principal → réponse correcte
+  via le secours) + le cas où les deux échouent continue de lever proprement. ✔️ Vérifié
+  (mocks — pas encore observé en conditions réelles, la situation ne s'est pas représentée).
 
 ### ⏳ T5bis — Évaluation du modèle avant mise en production — PAS COMMENCÉ
 - Annoter à la main ~60 articles réels : catégorie/importance attendues, jugement humain
@@ -222,58 +250,94 @@ conclusion est réappliquée en dur après coup, indépendamment de la réponse 
 
 ### 🟡 T8 — Journalisation et observabilité — PARTIEL
 - Logs horodatés, niveau configurable, résumé de fin de cycle (collectés/nouveaux/classifiés/
-  Route A/Route B/filtrés/échoués/tokens) : **fait et vérifié en réel**.
+  Route A/Route B/filtrés/échoués/tokens) : **fait et vérifié en réel**, consultable dans
+  l'onglet **Actions** du dépôt GitHub depuis que T10 tourne.
 - **Pas encore fait** : commande `stats` (volumétrie/répartition sur 7 jours) — jamais construite.
-- « Consultable dans l'onglet Actions de GitHub » ne s'applique pas encore : on tourne en local
-  pour l'instant, pas sur GitHub Actions (voir T10).
 
 ### ✅ T9 — Tests — FAIT, maintenu à jour à chaque changement
 - Unitaires + intégration `respx` (RSS, Gemini mocké, webhooks) — **54 tests, tous au vert**,
   aucun test n'appelle une API réelle. Mis à jour à chaque évolution (format 4 messages,
   filtre mots-clés France, User-Agent navigateur, `EmptyFeedError`, commande `resend`).
 
-### ❌ T10 — Déploiement (workflow GitHub Actions) — RIEN DE FAIT, PROCHAINE ÉTAPE
-- Création du dépôt GitHub **public**, premier push (aucun dépôt distant n'existe encore).
+### ✅ T10 — Déploiement (workflow GitHub Actions) — FAIT, validé en conditions réelles
+- Dépôt GitHub **public** créé (`alihamdani1/kpop_`), premier push effectué (branche `main`).
 - `.github/workflows/pipeline.yml` : `schedule` (cron **15 min**) + `workflow_dispatch` ;
-  `concurrency` anti-chevauchement ; checkout, setup Python (cache dépendances), secrets,
-  exécution du pipeline, commit automatique de `data/kpop.db` si modifiée.
-- Secrets à déclarer dans **GitHub → Settings → Secrets and variables → Actions** :
-  `GEMINI_API_KEY`, `DISCORD_WEBHOOK_ROUTE_A`, `DISCORD_WEBHOOK_ROUTE_B` (mêmes valeurs que
-  ton `.env` local).
-- **C'est la seule tâche qui bloque encore l'objectif initial** : tant qu'elle n'est pas faite,
-  le pipeline ne tourne que quand on le lance nous-mêmes depuis le terminal — pas 24h/24 sans
-  intervention.
-- **Fait quand** : le workflow tourne seul toutes les 15 min, committe son état, un
-  déclenchement manuel fonctionne pour les tests.
+  `concurrency` (`pipeline-run`, `cancel-in-progress: false`) anti-chevauchement ; checkout,
+  setup Python 3.12 (cache pip), secrets, exécution du pipeline, commit + push automatique de
+  `data/kpop.db` si modifiée (`github-actions[bot]`, commit seulement si diff non vide).
+- Les 3 secrets déclarés dans **GitHub → Settings → Secrets and variables → Actions** :
+  `GEMINI_API_KEY`, `DISCORD_WEBHOOK_ROUTE_A`, `DISCORD_WEBHOOK_ROUTE_B`.
+- **✅ FAIT — validé par un déclenchement manuel (`workflow_dispatch`) réel** : cycle complet
+  exécuté sur le runner GitHub (collecte 108 articles, 5 classifiés dans la limite de test,
+  1 article envoyé sur Route A avec les 4 messages Discord attendus, reçus et vérifiés sur
+  mobile), `data/kpop.db` recommise et repoussée sur `main` (`013b1c2..cda8c35`), zéro erreur
+  d'analyse ou d'envoi. Le pipeline tourne maintenant en autonome, plus besoin de le lancer
+  depuis un terminal.
 
-### ⏸️ T11 — Réglage et durcissement (après premières journées de production) — BLOQUÉ PAR T10
+### ⏳ T11 — Réglage et durcissement — DÉBLOQUÉ (T10 fait), PAS COMMENCÉ
 - Ajustement du prompt selon les erreurs observées en conditions réelles (catégorie, viralité,
   qualité des brouillons de tweet).
-- Surveillance mensuelle des quotas gratuits Gemini/Groq.
+- Surveillance mensuelle des quotas gratuits Gemini (principal + secours).
 - **Calibration du score de viralité** : si la rédaction note quels tweets publiés ont
   réellement bien marché, ces données permettent de recouper l'heuristique avec la réalité.
 - Retrait progressif de `--limit 5` une fois le volume de production (~150/jour) validé.
 - Purge/archivage des articles anciens si la base versionnée grossit trop.
+
+### 📝 T12 — Digest hebdomadaire — PLANIFIÉ, PAS ENCORE IMPLÉMENTÉ
+
+Salon Discord dédié résumant les temps forts de la semaine — plus de valeur éditoriale qu'un
+simple comptage (remplace l'idée initiale de commande `stats` de T8 sur ce terrain-là ; `stats`
+reste utile pour du pur diagnostic technique, les deux ne sont pas mutuellement exclusifs).
+
+**Principe retenu** : un seul appel IA par semaine (coût négligeable — 1 vs ~2100 appels/semaine
+en régime normal), mais cet appel ne rédige QUE l'intro narrative. La liste des 10 articles
+(titres, liens) est générée par le code à partir de la base, jamais par le modèle — pour ne
+jamais risquer qu'il invente ou déforme une URL.
+
+**Découpage** :
+
+| # | Sous-tâche | Fichier | Contenu |
+|---|---|---|---|
+| T12.1 | Sélection des articles | `storage.py` | Nouvelle fonction `top_articles_since(conn, since, limit=10)` : articles `SENT` des 7 derniers jours, toutes routes confondues (A et B — une semaine calme peut avoir de bons articles B), triés par `virality` DESC puis `importance` DESC |
+| T12.2 | Synthèse IA | `analyzer.py` | Nouveau schéma Pydantic `WeeklyDigestIntro` (un seul champ `intro: str`, 3-4 phrases) ; nouvelle méthode sur `GeminiAnalyzer`, bénéficie automatiquement du fallback (T5ter) |
+| T12.3 | Construction et envoi | `notifier.py` | Nouvel embed : intro IA en description + liste numérotée des 10 articles (titre + lien, générée par le code) en fields ou texte |
+| T12.4 | Orchestration + CLI | `pipeline.py`, `__main__.py` | `run_weekly_digest(settings)` ; nouvelle sous-commande `python -m kpop_bot weekly-digest` |
+| T12.5 | Déploiement | `.github/workflows/` | Nouveau workflow séparé (pas de logique conditionnelle dans le cron 15 min existant), cron hebdomadaire |
+| T12.6 | Tests | `tests/` | Sélection/tri (cas limites : moins de 10 articles disponibles, semaine sans aucun envoi), construction de l'embed, orchestration mockée |
+
+**Décisions à confirmer avant de coder** (proposées par défaut, à corriger si besoin) :
+
+| Sujet | Proposition par défaut |
+|---|---|
+| Nom du salon / webhook | `#recap-hebdo` → nouveau secret `DISCORD_WEBHOOK_WEEKLY` (optionnel dans `Settings`, pour ne pas casser `run` si non configuré) |
+| Jour/heure d'exécution | Lundi 9h (heure UTC) |
+| Style de contenu | Intro IA + liste fiable en code (validé à l'oral, retenu ci-dessus) |
+| Portée de la sélection | Route A + Route B confondues (pas seulement Route A) |
+
+**Fait quand** : un lundi, `#recap-hebdo` reçoit un message avec une intro cohérente sur la
+semaine écoulée et 10 liens corrects vers les articles les plus importants envoyés.
 
 ---
 
 ## Ordre d'exécution — où on en est
 
 ```
-✅T1 → ✅T2 → ✅T3 → ✅T4 → ✅T5 → ✅T6 → ✅T7 → 🟡T8 → ✅T9 → ❌T10 → ⏸️T11
-                                                              ▲
-                                                    on est ici — prochaine étape
+✅T1 → ✅T2 → ✅T3 → ✅T4 → ✅T5 → ✅T5ter → ✅T6 → ✅T7 → 🟡T8 → ✅T9 → ✅T10 → T11
+                                                                                ▲
+                                                                      on est ici — objectif initial atteint
        └──────────────── socle + métier : fait ────────────────┘   (T4bis / T5bis toujours reportées)
 ```
 
 **Restant concrètement** :
-- **T10** (déploiement GitHub Actions) — la seule tâche qui empêche encore le fonctionnement
-  100 % autonome, l'objectif initial du projet. C'est la prochaine étape naturelle.
+- **Objectif initial atteint** : le pipeline tourne 100 % en autonome sur GitHub Actions
+  (cron 15 min), sans intervention manuelle, avec un modèle de secours en cas de quota atteint.
+- **T11** — peut démarrer dès que quelques jours de production réelle auront donné assez de
+  signal (erreurs de catégorie/viralité observées, quotas, qualité des brouillons de tweet).
 - **T8** partiel — commande `stats` non construite (mineur, pas bloquant).
+- **T12** — digest hebdomadaire, planifié ci-dessous, pas encore implémenté.
 - **T4bis** (dédup sémantique) et **T5bis** (évaluation comparative Gemini/Groq) — volontairement
   repoussées, elles affinent un système qui marche déjà plutôt que de bloquer sa mise en route.
   T5bis nécessite en plus un travail d'annotation manuelle de ta part.
-- **T11** — ne peut pas commencer avant que T10 tourne en production depuis quelques jours.
 
 ---
 
@@ -306,6 +370,14 @@ conclusion est réappliquée en dur après coup, indépendamment de la réponse 
 | Intégration API X/Twitter | **Annulée.** Aucune publication automatique. Le robot rédige un brouillon (`tweet_draft`), la rédaction relit et publie elle-même — voir §4 de `context.md` |
 | Salons Discord | **2 routes, pas de salon par catégorie** : `#actus-videos` (Route A) et `#drafts-twitter` (Route B) |
 
-Plus aucun point structurant n'est ouvert. Les seuls ajustements restants (liste de sources
-étendue au-delà des 3 retenues, contenu précis d'`artist_tiers.yaml`, mapping exact des badges)
-sont des paramètres de configuration modifiables sans toucher au code.
+### Nouvelle décision — résilience quota et digest hebdomadaire
+
+| Sujet | Décision |
+|---|---|
+| Fallback sur quota dépassé | **Second modèle Gemini**, pas Groq — quota indépendant, zéro risque qualité non validée. Implémenté (T5ter). Principal : `gemini-3.5-flash-lite` ; secours : `gemini-3.1-flash-lite` |
+| Digest hebdomadaire | Remplace/complète l'idée de commande `stats` (T8) par quelque chose de plus utile éditorialement — top 10 de la semaine, intro IA + liste fiable en code. Planifié (T12), pas encore codé |
+
+Plus aucun point structurant n'est ouvert sur l'architecture initiale. Les seuls ajustements
+restants (liste de sources étendue au-delà des 3 retenues, contenu précis d'`artist_tiers.yaml`,
+mapping exact des badges, détails de configuration de T12) sont des paramètres modifiables sans
+toucher au code, ou des sous-tâches déjà découpées ci-dessus.
