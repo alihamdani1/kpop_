@@ -81,7 +81,7 @@ hallucination du modèle ne peut faire passer un événement français à traver
 ```
    ┌─────────────────────────────────────────────────────────────────────┐
    │  SOURCES ANGLOPHONES  (flux RSS/Atom)                               │
-   │  Soompi · allkpop · Yonhap Entertainment · … (liste configurable)  │
+   │  Soompi · Yonhap Culture · … (liste configurable)                  │
    └────────────────────────────────┬────────────────────────────────────┘
                                     │  ① COLLECTE
                                     ▼

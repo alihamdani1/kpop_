@@ -119,17 +119,20 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
             stats.filtered += 1
 
     to_send = storage.pending(conn, ArticleStatus.ANALYZED)
+    send_index = 0  # numérote uniquement les envois réels, voir notifier.build_info_header
     for article in to_send:
         if dry_run:
             route_label = article.route.value if article.route else "?"
             logger.info("[dry-run] enverrait sur Route %s : %s", route_label, article.title)
             continue
+        send_index += 1
         try:
             notifier.notify(
                 article,
                 url_a=settings.discord_webhook_route_a,
                 url_b=settings.discord_webhook_route_b,
                 timeout=settings.request_timeout_seconds,
+                index=send_index,
             )
             storage.mark_sent(conn, article.id)
             stats.sent += 1
@@ -140,3 +143,23 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
 
     conn.close()
     return stats
+
+
+def resend_sent(settings: Settings, *, limit: int | None = None) -> int:
+    """Renvoie sur Discord les articles déjà au statut SENT — pour valider un changement de
+    mise en forme (embed, message) sans reconsommer de quota Gemini. N'appelle jamais l'IA,
+    ne modifie aucun état en base : c'est un outil de vérification, pas une étape du cycle."""
+    conn = storage.init_db(settings.db_path)
+    articles = storage.pending(conn, ArticleStatus.SENT, limit=limit)
+    for index, article in enumerate(articles, start=1):
+        notifier.notify(
+            article,
+            url_a=settings.discord_webhook_route_a,
+            url_b=settings.discord_webhook_route_b,
+            timeout=settings.request_timeout_seconds,
+            index=index,
+        )
+        route_label = article.route.value if article.route else "?"
+        logger.info("Renvoyé : [Route %s] %s", route_label, article.title)
+    conn.close()
+    return len(articles)

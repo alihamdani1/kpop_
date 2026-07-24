@@ -6,16 +6,21 @@ sources:
     url: https://www.soompi.com/feed
     active: true
 
-  - name: Yonhap Entertainment
-    # URL À CONFIRMER MANUELLEMENT. en.yna.co.kr bloque les requêtes automatisées (403 /
-    # injoignable depuis cet environnement) — impossible de vérifier le flux exact.
-    # Corriger l'URL ci-dessous puis passer active: true.
-    url: https://en.yna.co.kr/RSS/news.xml
-    active: false
+  - name: Yonhap Culture
+    # Le 403 initial était bien un filtre anti-bot naïf (User-Agent) — corrigé dans
+    # fetcher.py. /RSS/news.xml existe mais c'est le flux général (politique, économie...),
+    # hors sujet. /RSS/culture.xml est un flux mixte culture coréenne : contient du vrai
+    # contenu K-pop pertinent (comebacks, classements Billboard) mélangé à du hors-sujet
+    # (cinéma, actualité générale) — exactement le genre de bruit que le classificateur IA
+    # est censé filtrer. Vérifié manuellement le 24/07/2026.
+    url: https://en.yna.co.kr/RSS/culture.xml
+    active: true
 
   - name: allkpop
-    # URL À CONFIRMER MANUELLEMENT. www.allkpop.com bloque aussi les requêtes automatisées
-    # (403), et le flux RSS historique semble avoir été retiré lors d'une refonte du site.
-    # Corriger l'URL ci-dessous (ou trouver le flux actuel) puis passer active: true.
+    # Le 403 n'était PAS un filtre anti-bot : la vraie cause est un flux RSS retiré lors
+    # d'une refonte du site (confirmé — /feed, /rss, /feed/rss, /rss.xml renvoient tous
+    # 404, pas 403, avec le User-Agent navigateur). Le correctif User-Agent de fetcher.py
+    # n'y change rien, logiquement. Laissé inactif tant qu'aucun flux de remplacement n'est
+    # trouvé. Vérifié manuellement le 24/07/2026.
     url: https://www.allkpop.com/rss.xml
     active: false

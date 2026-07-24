@@ -1,0 +1,49 @@
+name: Pipeline K-pop
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: pipeline-run
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+
+      - name: Installer les dépendances
+        run: pip install .
+
+      - name: Exécuter le pipeline
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DISCORD_WEBHOOK_ROUTE_A: ${{ secrets.DISCORD_WEBHOOK_ROUTE_A }}
+          DISCORD_WEBHOOK_ROUTE_B: ${{ secrets.DISCORD_WEBHOOK_ROUTE_B }}
+        run: python -m kpop_bot run
+
+      - name: Committer la base si modifiée
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/kpop.db
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: mise à jour automatique de la base (cycle pipeline)"
+            git push
+          else
+            echo "Aucun changement dans la base, rien à committer."
+          fi

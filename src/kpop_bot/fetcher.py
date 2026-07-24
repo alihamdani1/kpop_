@@ -22,6 +22,23 @@ logger = logging.getLogger(__name__)
 _TRACKING_PREFIXES = ("utm_",)
 _TAG_RE = re.compile(r"<[^>]+>")
 
+# Certains sites (Yonhap, allkpop) rejettent les User-Agent par défaut des bibliothèques HTTP.
+# En-têtes de navigateur standards pour paraître légitime — pas une garantie contre une
+# protection plus poussée (challenge JS, fingerprinting), seulement contre un filtre naïf.
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+class EmptyFeedError(ValueError):
+    """La requête a réussi mais n'a produit aucun item exploitable — probablement une page
+    de challenge/erreur renvoyée avec un statut 200 plutôt qu'un vrai flux RSS/Atom."""
+
 
 @dataclass(frozen=True)
 class Source:
@@ -65,11 +82,22 @@ def _entry_published_at(entry: feedparser.FeedParserDict) -> dt.datetime:
 
 
 def fetch_source(source: Source, *, timeout: float) -> list[FetchedItem]:
-    """Récupère et normalise les items d'une seule source. Lève en cas d'échec réseau —
-    à l'appelant (`fetch_all`) de journaliser et de passer à la source suivante."""
-    response = httpx.get(source.url, timeout=timeout, follow_redirects=True)
+    """Récupère et normalise les items d'une seule source. Lève en cas d'échec réseau ou de
+    flux vide — à l'appelant (`fetch_all`) de journaliser et de passer à la source suivante."""
+    response = httpx.get(
+        source.url, timeout=timeout, follow_redirects=True, headers=_BROWSER_HEADERS
+    )
     response.raise_for_status()
     parsed = feedparser.parse(response.content)
+
+    if not parsed.entries:
+        # feedparser ne lève jamais sur un contenu inattendu (page de challenge, HTML
+        # générique...) : il retourne juste 0 entrée. On le traite explicitement comme un
+        # échec, pour ne jamais activer silencieusement une source qui ne remonte rien.
+        raise EmptyFeedError(
+            f"Réponse reçue mais aucun item exploitable (bozo={parsed.bozo}) — "
+            "probablement pas un flux RSS/Atom valide."
+        )
 
     items: list[FetchedItem] = []
     for entry in parsed.entries:

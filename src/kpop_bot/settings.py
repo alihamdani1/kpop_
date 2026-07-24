@@ -17,7 +17,9 @@ class Settings(BaseSettings):
     discord_webhook_route_b: str  # #drafts-twitter — volume quotidien
 
     # --- Paramètres avec valeur par défaut raisonnable, ajustables sans toucher au code. ---
-    gemini_model: str = "gemini-3.6-flash"
+    # gemini-3.1-flash-lite : plus de marge en RPM (15 vs ~10 sur gemini-3.6-flash) pour la
+    # phase de test. Le choix définitif pour la production sera tranché par T5bis.
+    gemini_model: str = "gemini-3.1-flash-lite"
     db_path: Path = Path("data/kpop.db")
     sources_path: Path = Path("config/sources.yaml")
     artist_tiers_path: Path = Path("config/artist_tiers.yaml")

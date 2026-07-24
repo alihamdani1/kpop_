@@ -1,5 +1,16 @@
 """Diffusion Discord (T6). Deux routes, deux webhooks — pas de salon par catégorie, voir
-context.md §4. `BRUIT_INUTILE` n'atteint jamais cette étape (filtré avant, en amont)."""
+context.md §4. `BRUIT_INUTILE` n'atteint jamais cette étape (filtré avant, en amont).
+
+Chaque article retenu produit QUATRE messages Discord distincts, pas un seul embed multi-champs :
+1. En-tête "INFO {n}" (n = position de l'article dans le cycle en cours).
+2. L'embed d'information (titre, score, résumé détaillé le cas échéant).
+3. En-tête "Brouillon Tweet".
+4. Le message texte brut contenant uniquement le brouillon de tweet.
+Les en-têtes sont des éléments fixes (aucun appel IA) qui structurent visuellement le salon.
+Sur mobile, la sélection tactile à l'intérieur d'un embed à plusieurs champs déborde souvent
+sur le champ voisin. En isolant le tweet dans son propre message, sans rien autour, il n'y a
+plus rien sur quoi la sélection puisse mordre.
+"""
 
 from __future__ import annotations
 
@@ -36,12 +47,9 @@ def _score_field(record: ArticleRecord) -> dict:
     }
 
 
-def _tweet_field(record: ArticleRecord) -> dict:
-    return {"name": "Brouillon de tweet", "value": f"```{record.tweet_draft}```", "inline": False}
-
-
 def build_embed(record: ArticleRecord) -> dict:
-    """Construit l'embed adapté à la route de l'article. Suppose `route in (A, B)`."""
+    """Embed d'information (titre, score, résumé) — SANS le brouillon de tweet, envoyé à
+    part par `notify()`. Suppose `route in (A, B)`."""
     color = _VIRALITY_COLORS[record.virality] if record.virality else 0x607D8B
     base = {
         "title": record.title,
@@ -59,12 +67,26 @@ def build_embed(record: ArticleRecord) -> dict:
                 "value": record.video_summary or "(non généré)",
                 "inline": False,
             },
-            _tweet_field(record),
         ]
     else:  # Route.B
-        base["fields"] = [_score_field(record), _tweet_field(record)]
+        base["fields"] = [_score_field(record)]
 
     return base
+
+
+def build_info_header(index: int) -> str:
+    """En-tête précédant l'embed d'info. `index` = position de l'article dans le cycle en
+    cours (1er article envoyé -> "INFO 1", 2e -> "INFO 2", etc.).
+
+    Syntaxe titre Markdown ("# ") plutôt que du simple gras : rendu identique et fonctionnel
+    sur mobile comme sur desktop, tant que c'est un message texte brut (pas un champ d'embed,
+    où les titres Markdown ne sont pas rendus — cf. discord/discord-api-docs#7167)."""
+    return f"# INFO {index}"
+
+
+def build_tweet_header() -> str:
+    """En-tête précédant le message-tweet. Voir la note de `build_info_header`."""
+    return "# Brouillon Tweet"
 
 
 def _webhook_url_for(record: ArticleRecord, *, url_a: str, url_b: str) -> str:
@@ -75,9 +97,8 @@ def _webhook_url_for(record: ArticleRecord, *, url_a: str, url_b: str) -> str:
     raise ValueError(f"Aucun webhook pour la route {record.route!r} — article filtré attendu ici.")
 
 
-def send_embed(webhook_url: str, embed: dict, *, timeout: float) -> None:
-    """Envoie un embed, avec une gestion basique du rate-limit Discord (429 + Retry-After)."""
-    payload = {"embeds": [embed]}
+def _post_webhook(webhook_url: str, payload: dict, *, timeout: float) -> None:
+    """Envoi générique, avec gestion basique du rate-limit Discord (429 + Retry-After)."""
     for attempt in range(1, _MAX_RETRIES + 1):
         response = httpx.post(webhook_url, json=payload, timeout=timeout)
         if response.status_code in (200, 204):
@@ -98,8 +119,20 @@ def send_embed(webhook_url: str, embed: dict, *, timeout: float) -> None:
     raise NotificationError("Webhook Discord toujours rate-limité après plusieurs tentatives.")
 
 
-def notify(record: ArticleRecord, *, url_a: str, url_b: str, timeout: float) -> None:
-    """Point d'entrée du pipeline : construit et envoie l'embed pour un article ANALYZED."""
+def send_embed(webhook_url: str, embed: dict, *, timeout: float) -> None:
+    _post_webhook(webhook_url, {"embeds": [embed]}, timeout=timeout)
+
+
+def send_message(webhook_url: str, content: str, *, timeout: float) -> None:
+    _post_webhook(webhook_url, {"content": content}, timeout=timeout)
+
+
+def notify(record: ArticleRecord, *, url_a: str, url_b: str, timeout: float, index: int) -> None:
+    """Point d'entrée du pipeline : envoie les 4 messages d'un article ANALYZED, dans
+    l'ordre, vers le même webhook. `index` numérote l'article au sein du cycle en cours
+    (voir `build_info_header`)."""
     webhook_url = _webhook_url_for(record, url_a=url_a, url_b=url_b)
-    embed = build_embed(record)
-    send_embed(webhook_url, embed, timeout=timeout)
+    send_message(webhook_url, build_info_header(index), timeout=timeout)
+    send_embed(webhook_url, build_embed(record), timeout=timeout)
+    send_message(webhook_url, build_tweet_header(), timeout=timeout)
+    send_message(webhook_url, record.tweet_draft, timeout=timeout)
