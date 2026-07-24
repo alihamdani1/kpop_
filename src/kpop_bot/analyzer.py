@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from pathlib import Path
 from typing import TypeVar
 
@@ -132,11 +133,17 @@ class GeminiAnalyzer:
         model: str,
         artist_tiers: dict[str, list[str]],
         fallback_model: str | None = None,
+        min_seconds_between_calls: float = 4.5,
     ) -> None:
         self._client = genai.Client(api_key=api_key)
         self._model = model
         self._fallback_model = fallback_model
         self._artist_tiers_text = _format_artist_tiers(artist_tiers)
+        # 15 RPM sur gemini-3.5-flash-lite / gemini-3.1-flash-lite -> 1 appel/4s max.
+        # 4.5s laisse ~11% de marge. Espace CHAQUE appel réel (classify, write, et une
+        # éventuelle tentative de secours) — voir `_throttle()`. 0 = désactivé (tests).
+        self._min_interval = min_seconds_between_calls
+        self._last_call_at: float | None = None
 
     def classify(
         self, item: ArticleRecord, *, france_flag: bool
@@ -196,9 +203,20 @@ class GeminiAnalyzer:
             )
             return self._generate(self._fallback_model, system_prompt, user_content, schema)
 
+    def _throttle(self) -> None:
+        """Espace les appels réels pour rester sous la limite RPM. Un throttle partagé entre
+        principal et secours est plus prudent qu'un compteur par modèle — coût négligeable
+        vu la rareté du secours."""
+        if self._last_call_at is not None:
+            wait = self._min_interval - (time.monotonic() - self._last_call_at)
+            if wait > 0:
+                time.sleep(wait)
+        self._last_call_at = time.monotonic()
+
     def _generate(
         self, model: str, system_prompt: str, user_content: str, schema: type[_T]
     ) -> tuple[_T, int, int]:
+        self._throttle()
         try:
             response = self._client.models.generate_content(
                 model=model,

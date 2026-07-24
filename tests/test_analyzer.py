@@ -65,6 +65,7 @@ def gemini(monkeypatch):
         api_key="test-key",
         model="gemini-3.6-flash",
         artist_tiers={"tier_1": ["BTS"], "tier_2": ["Groupe X"]},
+        min_seconds_between_calls=0,  # throttling réel désactivé pour des tests instantanés
     )
     return instance
 
@@ -76,6 +77,7 @@ def gemini_with_fallback(monkeypatch):
         model="gemini-3.1-flash-lite",
         fallback_model="gemini-3.6-flash",
         artist_tiers={"tier_1": ["BTS"], "tier_2": ["Groupe X"]},
+        min_seconds_between_calls=0,
     )
     return instance
 
@@ -210,3 +212,45 @@ def test_write_route_b_ne_demande_pas_le_resume_video(gemini, monkeypatch, make_
     result, _, _ = gemini.write(make_article(), classification, Route.B)
     assert result.video_summary is None
     assert "video_summary" not in captured_prompts[0]
+
+
+# --- Throttling RPM : horloge simulée, aucune vraie attente. ---
+
+
+def test_throttle_espace_les_appels_selon_min_interval(monkeypatch):
+    instance = analyzer.GeminiAnalyzer(
+        api_key="test-key",
+        model="gemini-3.5-flash-lite",
+        artist_tiers={},
+        min_seconds_between_calls=4.5,
+    )
+
+    fake_now = [100.0]  # horloge simulée, avance manuellement
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(analyzer.time, "monotonic", lambda: fake_now[0])
+    monkeypatch.setattr(analyzer.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    instance._throttle()  # premier appel : rien à attendre
+    assert sleeps == []
+
+    fake_now[0] += 1.0  # seulement 1s écoulée depuis le premier appel
+    instance._throttle()
+    assert sleeps == [pytest.approx(3.5)]  # 4.5 - 1.0
+
+    sleeps.clear()
+    fake_now[0] += 10.0  # largement plus que l'intervalle minimum
+    instance._throttle()
+    assert sleeps == []  # aucune attente nécessaire
+
+
+def test_throttle_desactive_si_min_interval_nul(monkeypatch):
+    instance = analyzer.GeminiAnalyzer(
+        api_key="test-key",
+        model="gemini-3.5-flash-lite",
+        artist_tiers={},
+        min_seconds_between_calls=0,
+    )
+    monkeypatch.setattr(analyzer.time, "sleep", lambda _s: pytest.fail("ne doit jamais dormir"))
+    instance._throttle()
+    instance._throttle()  # même appelé deux fois de suite, sans délai

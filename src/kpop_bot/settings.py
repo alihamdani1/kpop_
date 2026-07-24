@@ -17,14 +17,19 @@ class Settings(BaseSettings):
     discord_webhook_route_b: str  # #drafts-twitter — volume quotidien
 
     # --- Paramètres avec valeur par défaut raisonnable, ajustables sans toucher au code. ---
-    # gemini-3.5-flash-lite : 15 RPM / 1500 RPD gratuits, GA. Le choix définitif pour la
-    # production sera tranché par T5bis.
+    # gemini-3.5-flash-lite : 15 RPM / 500 RPD gratuits (quota réel du compte, confirmé par
+    # l'utilisateur — plus serré que les 1500 RPD documentés publiquement). Le choix définitif
+    # pour la production sera tranché par T5bis.
     gemini_model: str = "gemini-3.5-flash-lite"
-    # Modèle de secours : quota (RPM/RPD) totalement indépendant du modèle principal, même
-    # clé API. N'intervient qu'après un 429 sur gemini_model — voir analyzer.py
+    # Modèle de secours : quota (RPM/RPD, ~identique au principal) totalement indépendant,
+    # même clé API. N'intervient qu'après un 429 sur gemini_model — voir analyzer.py
     # `_generate_with_fallback`. gemini-3.1-flash-lite est déjà validé en conditions réelles
     # (voir T5), donc un choix de secours "connu et fiable" plutôt qu'une inconnue.
     gemini_fallback_model: str = "gemini-3.1-flash-lite"
+    # Espacement minimum entre deux appels Gemini réels (voir analyzer.py `_throttle`).
+    # 15 RPM -> 4s/appel au maximum ; 4.5s laisse ~11% de marge. Évite de reproduire la
+    # rafale qui avait déclenché un 429 en test avec --limit élevé et aucune pause.
+    gemini_min_seconds_between_calls: float = 4.5
     db_path: Path = Path("data/kpop.db")
     sources_path: Path = Path("config/sources.yaml")
     artist_tiers_path: Path = Path("config/artist_tiers.yaml")

@@ -12,8 +12,10 @@ import sys
 from kpop_bot.pipeline import resend_sent, run_cycle
 from kpop_bot.settings import get_settings
 
-# 5 par défaut en développement/test — voir TODO.md point 4 (150/jour visé en production).
-_DEFAULT_LIMIT = 5
+# 30 : écoule un backlog de ~94 articles en ~4 cycles plutôt que ~19 (ex-limite de 5), tout
+# en restant très sous le budget de 500 RPD (voir settings.py). L'espacement entre appels
+# (gemini_min_seconds_between_calls) protège le RPM même à cette limite plus haute.
+_DEFAULT_LIMIT = 30
 
 
 def _build_parser() -> argparse.ArgumentParser:
