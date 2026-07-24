@@ -1,0 +1,21 @@
+# Flux RSS surveillés. `active: false` = ignoré par le fetcher (T4) sans supprimer l'entrée.
+# Ajouter/retirer une source ne demande aucune modification de code.
+
+sources:
+  - name: Soompi
+    url: https://www.soompi.com/feed
+    active: true
+
+  - name: Yonhap Entertainment
+    # URL À CONFIRMER MANUELLEMENT. en.yna.co.kr bloque les requêtes automatisées (403 /
+    # injoignable depuis cet environnement) — impossible de vérifier le flux exact.
+    # Corriger l'URL ci-dessous puis passer active: true.
+    url: https://en.yna.co.kr/RSS/news.xml
+    active: false
+
+  - name: allkpop
+    # URL À CONFIRMER MANUELLEMENT. www.allkpop.com bloque aussi les requêtes automatisées
+    # (403), et le flux RSS historique semble avoir été retiré lors d'une refonte du site.
+    # Corriger l'URL ci-dessous (ou trouver le flux actuel) puis passer active: true.
+    url: https://www.allkpop.com/rss.xml
+    active: false

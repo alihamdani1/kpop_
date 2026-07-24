@@ -1,0 +1,31 @@
+# Table de référence injectée dans le prompt de classification (T5), pour ancrer le score de
+# viralité sur des repères objectifs plutôt que sur la seule connaissance générale du modèle.
+#
+# Tier 1 = portée mondiale maximale, Tier 3 = solide/montant. Tout artiste absent de cette
+# liste est traité par défaut (ni bonus ni malus explicite). Liste de départ à enrichir par
+# la rédaction — aucune modification de code nécessaire.
+
+tier_1:
+  - BTS
+  - BLACKPINK
+
+tier_2:
+  - Stray Kids
+  - SEVENTEEN
+  - TWICE
+  - NewJeans
+  - ATEEZ
+  - "(G)I-DLE"
+  - TXT
+  - ENHYPEN
+  - LE SSERAFIM
+  - IVE
+
+tier_3:
+  - RIIZE
+  - ZEROBASEONE
+  - BOYNEXTDOOR
+  - KATSEYE
+  - ILLIT
+  - aespa
+  - NCT DREAM

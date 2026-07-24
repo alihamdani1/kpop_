@@ -1,0 +1,64 @@
+"""Point d'entrée CLI : `python -m kpop_bot run [--dry-run] [--limit N]`."""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+
+from kpop_bot.pipeline import run_cycle
+from kpop_bot.settings import get_settings
+
+# 5 par défaut en développement/test — voir TODO.md point 4 (150/jour visé en production).
+_DEFAULT_LIMIT = 5
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="kpop_bot", description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run_parser = subparsers.add_parser("run", help="Exécute un cycle complet du pipeline.")
+    run_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="N'envoie rien sur Discord ; journalise ce qui aurait été envoyé.",
+    )
+    run_parser.add_argument(
+        "--limit",
+        type=int,
+        default=_DEFAULT_LIMIT,
+        help=f"Nombre maximum d'articles analysés par cycle (défaut : {_DEFAULT_LIMIT}).",
+    )
+    run_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Active les logs de niveau DEBUG.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    if args.command == "run":
+        settings = get_settings()
+        stats = run_cycle(settings, limit=args.limit, dry_run=args.dry_run)
+        logging.getLogger(__name__).info("Cycle terminé — %s", stats.summary())
+        if stats.errors:
+            logging.getLogger(__name__).warning(
+                "%d erreur(s) durant le cycle : %s", len(stats.errors), "; ".join(stats.errors)
+            )
+        return 0
+
+    parser.error(f"Commande inconnue : {args.command}")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
