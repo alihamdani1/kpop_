@@ -33,3 +33,15 @@ sources:
     # par le classificateur, c'est attendu. Vérifié manuellement le 24/07/2026.
     url: https://www.koreaboo.com/feed/
     active: true
+
+  - name: Billboard K-Pop
+    # Flux vérifié fonctionnel (10 items pertinents). Complète le mix plutôt que de le
+    # dupliquer : ton journalistique sérieux (contrairement à Koreaboo), avec du vrai
+    # contenu scandale/juridique de niveau industrie (ex. procès HYBE) — un angle différent
+    # du gossip tabloïd. Billboard K-Town (tag proche) testé aussi, mais écarté : même
+    # éditeur, chevauchement de contenu trop probable sans dédup sémantique (T4bis, pas
+    # encore construite). Korea Herald et KpopStarz testés, flux introuvables/inexistants
+    # aux URLs essayées. Korea Times testé, fonctionne mais trop faible (3 items, contenu
+    # hors-sujet mélangé) pour être retenu. Vérifié manuellement le 24/07/2026.
+    url: https://www.billboard.com/t/k-pop/feed/
+    active: true
