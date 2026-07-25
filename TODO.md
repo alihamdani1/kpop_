@@ -25,7 +25,8 @@
 | **Base de données** | **SQLite**, fichier versionné dans le dépôt | Un seul fichier, zéro serveur. Les runners GitHub Actions sont jetables : la base doit être **recommise dans le dépôt** à la fin de chaque exécution pour survivre au cycle suivant (voir T3) |
 | **Hébergement / ordonnancement** | **GitHub Actions**, cron fixé à **15 min**, dépôt public | Minutes illimitées et gratuites sur dépôt public. Aucune machine à faire tourner. Limite assumée : timing approximatif |
 | **Fournisseur LLM** | **Google Gemini** (`gemini-3.5-flash-lite`, configurable), tier gratuit — derrière une interface interchangeable | Choisi pour la phase de test : 15 RPM / **500 RPD** gratuits (GA depuis le 21/07/2026 ; RPD réel du compte, plus serré que les 1500 documentés publiquement). Volume calibré (~150 art./jour ≈ 225 appels/jour en prod, voir point 4) confortablement sous ce plafond. SDK `google-genai`, sortie contrainte nativement via `response_schema` (Pydantic). Choix définitif pour la production à confirmer par T5bis |
-| **Modèle de secours (quota)** | **`gemini-3.1-flash-lite`**, implémenté (T5ter) — bascule automatique sur 429 | Quota RPM/RPD indépendant du modèle principal, même clé/SDK/prompt : zéro risque qualité non validée, contrairement à un vrai fournisseur tiers. Déjà validé en conditions réelles (précédent modèle principal) — secours "connu", pas une inconnue |
+| **Modèles de secours (quota)** | **`gemini-3.1-flash-lite`** puis **`gemini-2.5-flash-lite`**, implémentés (T5ter / T5quinquies) — bascule automatique sur 429, dans cet ordre | Quota RPM/RPD indépendant du modèle principal, même clé/SDK/prompt : zéro risque qualité non validée, contrairement à un vrai fournisseur tiers |
+| **2e clé API (montée en volume)** | Optionnelle (`gemini_api_key_2`), implémentée (T5quinquies) — retente toute la chaîne de modèles ci-dessus sur un 2e compte Google, uniquement après épuisement de la 1re clé | Double le pool de quotas gratuits disponible sans changer de fournisseur ni de format de prompt |
 | **Fournisseur LLM alternatif (non retenu comme fallback)** | Groq documenté, jamais implémenté | Écarté comme fallback automatique tant que T5bis n'a pas validé sa qualité éditoriale — resterait une option de bascule manuelle si Gemini devenait indisponible |
 | **Format de sortie IA** | Sortie contrainte par **schéma JSON** (`response_schema`) + validation Pydantic | Le modèle est empêché de produire une catégorie hors énumération, un JSON mal formé, ou un tweet trop long (`max_length=280` validé côté code) |
 | **Validation / config** | `pydantic` v2 + `pydantic-settings` | Un seul outil pour le schéma IA, la config et les variables d'environnement |
@@ -175,7 +176,7 @@ conclusion est réappliquée en dur après coup, indépendamment de la réponse 
 | Champ | Type | Rôle |
 |---|---|---|
 | `summary_fr` | str, 2 phrases | Toujours généré (Route A et B) |
-| `tweet_draft` | str, **≤ 280 caractères** | Toujours généré. Ton journalistique neutre, 1-2 emojis max, 2 hashtags pertinents, en français. Validé par Pydantic (`max_length=280`) — un dépassement déclenche le chemin d'erreur existant (`FAILED`, repris au cycle suivant), pas une troncature silencieuse |
+| `tweet_draft` | str, **≤ 260 caractères côté IA** | Toujours généré. Ton journalistique neutre, 1-2 emojis max, 2 hashtags pertinents, en français, se termine par une question d'engagement. Validé par Pydantic (`max_length=260`) — un dépassement déclenche le chemin d'erreur existant (`FAILED`, repris au cycle suivant), pas une troncature silencieuse. Plafond abaissé de 280 à 260 pour laisser la place au tag préfixé en code juste après — voir T5quater |
 | `video_summary` | str, **nullable** | Résumé détaillé (≈ 4-6 phrases), pensé pour scripter une vidéo. Demandé **uniquement si Route A** — économise des tokens de sortie sur la Route B, qui ne l'affiche pas |
 
 > **Choix d'implémentation assumé** : le résumé « détaillé pour la vidéo » (Route A) est un
@@ -223,6 +224,65 @@ conclusion est réappliquée en dur après coup, indépendamment de la réponse 
 - **Fait quand** : test simulé confirmant la bascule (429 sur le principal → réponse correcte
   via le secours) + le cas où les deux échouent continue de lever proprement. ✔️ Vérifié
   (mocks — pas encore observé en conditions réelles, la situation ne s'est pas représentée).
+
+### ✅ T5quater — Tag de catégorie + accroche d'engagement sur les tweets — FAIT
+- **Demande** : préfixer chaque tweet d'un tag visuel (`[GOSSIP]`, `[RELEASE]`, `[FLASH]`,
+  `[FRANCE]`) avec emoji, et terminer par une question qui donne envie de réagir (ex. « Notez le
+  son sur 10 » pour une sortie).
+- **Décision d'architecture** : le tag est **dérivé en code** (`determine_tweet_tag()` dans
+  `models.py`) à partir de `category`/`importance`/`virality` déjà connus — jamais redemandé à
+  l'IA. Deux raisons : (1) zéro coût/latence supplémentaire, (2) impossible que le tag contredise
+  la catégorie déjà affichée dans l'embed, contrairement à une 2e classification IA indépendante
+  sur la même donnée.
+- Règles de `determine_tweet_tag()` (priorité dans cet ordre) :
+  1. `MAJEUR` + viralité `VIRAL`/`ELEVE` → **FLASH** ⚡ (l'urgence prime sur le sujet)
+  2. `SCANDALE_DRAMA` → **GOSSIP** 🍵
+  3. `CONCERT_EVENEMENT_FRANCE` → **FRANCE** 🇫🇷
+  4. `COMEBACK_SORTIE` → **RELEASE** 🎵
+  5. Repli générique → **INFO** 📰 (non atteint aujourd'hui — `BRUIT_INUTILE` est toujours
+     `IGNORED` avant d'arriver ici — mais garde-fou correct si une catégorie sans branche dédiée
+     apparaît un jour ; distinct de RELEASE pour ne pas laisser croire qu'un contenu générique
+     est spécifiquement une sortie musicale)
+- Le préfixage (`f"{TWEET_TAG_LABELS[tag]}\n\n{tweet_draft}"`) a lieu dans `pipeline.py`,
+  immédiatement après `gemini.write()` et avant l'enregistrement en base — donc la version
+  taguée est ce qui est stockée, envoyée sur Discord, et renvoyée par `resend`.
+- L'accroche de fin de tweet, elle, **reste générée par l'IA** (contrairement au tag) : son bon
+  angle dépend du contenu précis de l'article, un gabarit figé sonnerait vite répétitif. Injectée
+  via un nouveau paramètre `{engagement_hook}` dans le prompt de rédaction, avec une consigne
+  différente par catégorie (`_ENGAGEMENT_HOOKS` dans `analyzer.py` — comeback : noter le son sur
+  10 ou donner son avis ; scandale : avis neutre sans prendre parti ; concert France : compter
+  parmi le public ou non).
+- Garde-fou : le plafond IA passe de 280 à 260 caractères (le plus long tag, `🇫🇷 [FRANCE]`, fait
+  ~13 caractères + 2 sauts de ligne) ; un log `WARNING` défensif signale tout dépassement de 280
+  après préfixage, qui ne devrait jamais se produire en pratique.
+- **Fait quand** : tests unitaires sur les 4 branches de `determine_tweet_tag()` + complétude de
+  `TWEET_TAG_LABELS` (`test_models.py`), test sur l'injection de la bonne consigne d'engagement
+  par catégorie dans le prompt (`test_analyzer.py`), test d'intégration bout en bout vérifiant
+  que le tweet stocké/envoyé par `run_cycle()` porte bien le tag attendu (`test_pipeline.py`).
+  ✔️ Vérifié par tests (mocks) — pas encore observé en conditions réelles (prochain cycle
+  GitHub Actions).
+
+### ✅ T5quinquies — 2e clé API + 3e modèle de secours (montée en volume) — FAIT
+- **Demande** : augmenter le volume d'appels Gemini possible, en ajoutant (1) un 3e modèle dans
+  la chaîne de secours et (2) une 2e clé API (2e compte Google), pour disposer d'un pool de
+  quotas plus large sans changer de fournisseur.
+- **Décision d'architecture** : `GeminiAnalyzer` ne prend plus une clé/un modèle principal/un
+  modèle de secours séparément, mais `api_keys: list[str]` et `models: list[str]` — la même
+  chaîne de modèles est tentée sur chaque clé, dans l'ordre (`_generate_with_fallback()` construit
+  la liste de toutes les combinaisons clé×modèle et les essaie une à une, uniquement sur 429).
+  Repli sur la 2e clé seulement après épuisement des **3** modèles sur la 1re — donc en dernier
+  recours, pas en répartition de charge.
+- Chaîne de modèles (identique sur les deux clés) : `gemini_model` (`gemini-3.5-flash-lite`) →
+  `gemini_fallback_model` (`gemini-3.1-flash-lite`, T5ter) → **`gemini_second_fallback_model`**
+  (nouveau, `gemini-2.5-flash-lite`).
+- Nouveau réglage optionnel `gemini_api_key_2` dans `settings.py` / `.env` — absent par défaut,
+  comportement mono-clé inchangé. Clé réelle du 2e compte de l'utilisateur ajoutée dans `.env`
+  (jamais commité, voir `.gitignore`).
+- Throttle (`_throttle()`) resté partagé entre toutes les clés/modèles, comme pour T5ter — le
+  repli sur la 2e clé reste rare, un compteur séparé par clé n'apporterait rien.
+- **Fait quand** : tests couvrant la bascule complète 1re clé (3 modèles épuisés) → 2e clé
+  (reprise au modèle principal), et le cas où les deux clés épuisent toute la chaîne
+  (`test_analyzer.py`). ✔️ Vérifié par tests (mocks) — pas encore observé en conditions réelles.
 
 ### ⏳ T5bis — Évaluation du modèle avant mise en production — PAS COMMENCÉ
 - Annoter à la main ~60 articles réels : catégorie/importance attendues, jugement humain
@@ -333,12 +393,78 @@ jamais risquer qu'il invente ou déforme une URL.
 **Fait quand** : un lundi, `#recap-hebdo` reçoit un message avec une intro cohérente sur la
 semaine écoulée et 10 liens corrects vers les articles les plus importants envoyés.
 
+### ✅ T13 — Rattrapage des faux négatifs BRUIT_INUTILE (records/paliers viraux) — FAIT
+
+**Origine** : l'article Soompi *"BLACKPINK's 'DDU-DU DDU-DU' Becomes 1st K-Pop Group MV Ever To
+Hit 2.4 Billion Views"* n'a jamais été envoyé — classé `BRUIT_INUTILE` par l'IA (confirmé en
+base : `status=FILTERED`, aucune erreur, donc **pas** un problème de quota). En creusant, 2 des
+5 titres "record/million/billion" du corpus étaient de vrais faux négatifs (ce record BLACKPINK,
+et "Gangnam Style" à 6 milliards de vues) — l'IA généralise trop le critère « classement
+racoleur » à de vrais records chiffrés.
+
+Trois filets complémentaires, chacun avec un rôle distinct :
+
+| # | Mesure | Fichier | Garantie |
+|---|---|---|---|
+| 1 | Fix de prompt (wording `BRUIT_INUTILE`) | `analyzer.py` | Aucune — améliore le taux général, reste probabiliste (modèle *lite*, distinction intrinsèquement floue) |
+| 2 | Filet déterministe mots-clés + artiste connu | `analyzer.py`, `settings.py` | Garantit ce motif précis (record chiffré + artiste répertorié), même si l'IA se trompe |
+| 3 | Salon `#info-a-verifier` | `notifier.py`, `pipeline.py` | Garantit qu'aucun article n'est **définitivement** perdu, quoi que fassent 1 et 2 |
+
+**1. Fix de prompt** — `_CLASSIFICATION_SYSTEM_PROMPT` distingue désormais explicitement un
+« classement/liste subjectif ou putaclic » (reste `BRUIT_INUTILE`) d'un « record ou palier
+VÉRIFIABLE ET CHIFFRÉ » lié à un artiste connu (ne l'est pas). `PROMPT_VERSION` passé à `v2`
+pour distinguer les articles classés avant/après ce changement.
+
+**2. Filet record/palier** (même principe que le filet France, mais correction en dernier
+recours plutôt que règle dure — il n'y a pas de catégorie unique garantie ici) :
+- `matches_viral_milestone(item, keywords, artist_tiers)` (`analyzer.py`) : vrai seulement si
+  **un mot-clé de record ET un artiste de `artist_tiers.yaml`** sont tous deux présents — un
+  mot-clé seul (ex. "record") serait bien trop générique (confirmé par un cas réel du corpus :
+  un record de fréquentation de musée, sans rapport). Nouveau réglage `viral_milestone_keywords`
+  dans `settings.py` (`billion views`, `million views`, `billion streams`, `million streams`,
+  `million copies`, `million albums`, `record high`, `all-time high`).
+- Si détecté : le prompt de classification reçoit une note système (`_MILESTONE_NOTE`, même
+  mécanisme que `_FRANCE_NOTE`) précisant que ce N'EST PAS du bruit. **Si l'IA maintient quand
+  même `BRUIT_INUTILE`** malgré la note, `classify()` force la catégorie à `COMEBACK_SORTIE`
+  avec une viralité `ELEVE` et une raison explicite ("Filet record/palier : ...") — un repli
+  raisonnable plutôt qu'un silence total, ajustable par un humain via Discord.
+- N'écrase jamais un jugement IA déjà correct (catégorie ≠ `BRUIT_INUTILE`, ou viralité déjà
+  fournie) — uniquement un filet de dernier recours.
+- Priorité : le filet France reste prioritaire si les deux se déclenchent en même temps (un
+  concert en France reste `CONCERT_EVENEMENT_FRANCE`, catégorie plus spécifique).
+
+**3. Salon `#info-a-verifier`** — filet de dernier recours pour **tout** ce qui reste classé
+`BRUIT_INUTILE` après les deux mesures ci-dessus, quelle qu'en soit la raison :
+- **Aucun appel Gemini supplémentaire** : réutilise la classification déjà produite par le 1er
+  appel IA (`classify()`), qui tourne déjà pour tous les articles, bruit inclus. Un seul message
+  Discord allégé par article (titre original, source, catégorie/importance, lien) — pas le
+  format 4-messages d'A/B, qui n'a de sens que pour du contenu à copier-coller.
+- Nouveau statut `ArticleStatus.FILTERED_SENT` : un article `FILTERED` transmis à ce salon n'y
+  est envoyé qu'une seule fois (sinon reproposé à chaque cycle de 15 min, indéfiniment).
+- **Optionnel** (`DISCORD_WEBHOOK_INFO_A_VERIFIER` absent = comportement inchangé, ces articles
+  restent simplement `FILTERED`) — pour ne jamais casser un déploiement existant qui n'aurait
+  pas ce salon configuré.
+- **Volume réel mesuré** : 95 articles `FILTERED` sur 133 traités (71 %) au moment de la
+  demande — largement plus que ce qui part sur A+B. Message volontairement allégé (1 message,
+  pas 4) pour rester gérable à ce volume.
+- Webhook réel fourni par l'utilisateur, salon `#info-a-verifier`, ajouté dans `.env` (jamais
+  commité) — **à ajouter aussi en secret GitHub Actions** (`DISCORD_WEBHOOK_INFO_A_VERIFIER`)
+  pour être actif en production, comme les webhooks A/B.
+
+**Fait quand** : tests sur `matches_viral_milestone` (mot-clé + artiste requis, aucun faux
+positif sur un mot-clé seul), sur l'injection de la note système et la correction de dernier
+recours dans `classify()` (et sa non-intervention si l'IA a déjà bien classé), sur
+`build_review_message`/`notify_review`, et un test d'intégration bout en bout par mesure dans
+`test_pipeline.py` (flag transmis, article envoyé + marqué `FILTERED_SENT`, comportement
+inchangé si le webhook n'est pas configuré). ✔️ Vérifié par tests (mocks) — pas encore observé
+en conditions réelles (prochain cycle GitHub Actions, une fois le secret ajouté).
+
 ---
 
 ## Ordre d'exécution — où on en est
 
 ```
-✅T1 → ✅T2 → ✅T3 → ✅T4 → ✅T5 → ✅T5ter → ✅T6 → ✅T7 → 🟡T8 → ✅T9 → ✅T10 → T11
+✅T1 → ✅T2 → ✅T3 → ✅T4 → ✅T5 → ✅T5ter → ✅T5quater → ✅T5quinquies → ✅T6 → ✅T7 → 🟡T8 → ✅T9 → ✅T10 → ✅T13 → T11
                                                                                 ▲
                                                                       on est ici — objectif initial atteint
        └──────────────── socle + métier : fait ────────────────┘   (T4bis / T5bis toujours reportées)
@@ -354,6 +480,9 @@ semaine écoulée et 10 liens corrects vers les articles les plus importants env
 - **T4bis** (dédup sémantique) et **T5bis** (évaluation comparative Gemini/Groq) — volontairement
   repoussées, elles affinent un système qui marche déjà plutôt que de bloquer sa mise en route.
   T5bis nécessite en plus un travail d'annotation manuelle de ta part.
+- **T13** : reste à ajouter `DISCORD_WEBHOOK_INFO_A_VERIFIER` (et `GEMINI_API_KEY_2`, oublié
+  lors de T5quinquies) comme secrets **GitHub Actions** — sans ça, le pipeline en production
+  continue de tourner en mono-clé et sans salon de vérification, seul le `.env` local les a.
 
 ---
 
@@ -392,6 +521,21 @@ semaine écoulée et 10 liens corrects vers les articles les plus importants env
 |---|---|
 | Fallback sur quota dépassé | **Second modèle Gemini**, pas Groq — quota indépendant, zéro risque qualité non validée. Implémenté (T5ter). Principal : `gemini-3.5-flash-lite` ; secours : `gemini-3.1-flash-lite` |
 | Digest hebdomadaire | Remplace/complète l'idée de commande `stats` (T8) par quelque chose de plus utile éditorialement — top 10 de la semaine, intro IA + liste fiable en code. Planifié (T12), pas encore codé |
+
+### Nouvelle décision — tag de catégorie et accroche d'engagement sur les tweets
+
+| Sujet | Décision |
+|---|---|
+| Tag visuel (`[GOSSIP]`/`[RELEASE]`/`[FLASH]`/`[FRANCE]`) | **Dérivé en code**, pas redemandé à l'IA — voir T5quater pour le détail des règles et la justification (coût nul, cohérence garantie avec la catégorie déjà affichée) |
+| Accroche de fin de tweet | **Reste générée par l'IA**, avec une consigne par catégorie injectée dans le prompt — contrairement au tag, l'angle dépend trop du contenu précis pour un gabarit figé |
+
+### Nouvelle décision — rattrapage des faux négatifs BRUIT_INUTILE (records/paliers viraux)
+
+| Sujet | Décision |
+|---|---|
+| Fix de prompt seul suffisant ? | **Non** — jugement probabiliste sur un modèle *lite*, sur une distinction intrinsèquement floue (record vérifiable vs classement putaclic). Améliore le taux général mais ne garantit rien seul — voir T13 |
+| Garantie déterministe | Filet mots-clés (record) **+** artiste connu (`artist_tiers.yaml`) — mêmes principes que le filet France, mais correction de dernier recours plutôt que règle dure (pas de catégorie unique garantie) |
+| Filet de dernier recours | Salon `#info-a-verifier` — tout ce qui reste `BRUIT_INUTILE` y est envoyé, à coût Gemini nul (réutilise `classify()`, déjà exécuté pour tous les articles) |
 
 Plus aucun point structurant n'est ouvert sur l'architecture initiale. Les seuls ajustements
 restants (liste de sources étendue au-delà des 3 retenues, contenu précis d'`artist_tiers.yaml`,

@@ -19,12 +19,13 @@ from kpop_bot.models import (
     Category,
     ClassificationResult,
     Route,
+    Virality,
     WritingResult,
 )
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"  # v2 : distinction record vérifiable / classement racoleur — voir T13
 
 _T = TypeVar("_T", bound=BaseModel)
 
@@ -47,11 +48,32 @@ def _format_artist_tiers(tiers: dict[str, list[str]]) -> str:
     return "\n".join(lines) if lines else "(aucune donnée de référence disponible)"
 
 
+def _matches_any_keyword(text: str, keywords: list[str]) -> bool:
+    """Recherche insensible à la casse, sur mots/phrases entiers (frontière `\\b`), gère les
+    mots-clés multi-mots (ex. 'Stade de France', 'billion views') aussi bien qu'un seul mot."""
+    return any(re.search(rf"\b{re.escape(kw)}\b", text, re.IGNORECASE) for kw in keywords)
+
+
 def matches_france_keywords(item: ArticleRecord, keywords: list[str]) -> bool:
     """Filet de sécurité déterministe (context.md §4). Recherche insensible à la casse, sur
     mots entiers, dans le titre + l'extrait. Pure fonction, testable sans réseau."""
     text = f"{item.title} {item.raw_summary}"
-    return any(re.search(rf"\b{re.escape(kw)}\b", text, re.IGNORECASE) for kw in keywords)
+    return _matches_any_keyword(text, keywords)
+
+
+def matches_viral_milestone(
+    item: ArticleRecord, keywords: list[str], artist_tiers: dict[str, list[str]]
+) -> bool:
+    """Filet de sécurité déterministe pour les records/paliers de streaming (T13) — ex.
+    "BLACKPINK's MV becomes 1st K-pop group MV to hit 2.4 billion views". Exige un mot-clé
+    de record ET un artiste déjà répertorié dans artist_tiers.yaml : un mot-clé seul (ex.
+    'record') serait bien trop générique pour ne pas produire de faux positifs. Pure
+    fonction, testable sans réseau."""
+    text = f"{item.title} {item.raw_summary}"
+    if not _matches_any_keyword(text, keywords):
+        return False
+    known_artists = [artist for artists in artist_tiers.values() for artist in artists]
+    return _matches_any_keyword(text, known_artists)
 
 
 _CLASSIFICATION_SYSTEM_PROMPT = """\
@@ -66,8 +88,12 @@ groupe.
 album), teaser, tracklist, date de sortie.
 - CONCERT_EVENEMENT_FRANCE : concert, showcase, fan-meeting ou tout événement ayant lieu en \
 France ou clairement annoncé pour la France.
-- BRUIT_INUTILE : reprise de post réseaux sociaux, publicité déguisée, classement racoleur, \
-contenu sans fait nouveau vérifiable.
+- BRUIT_INUTILE : reprise de post réseaux sociaux, publicité déguisée, classement/liste \
+subjectif ou putaclic (ex. « Top 10 des idoles les plus riches »), contenu sans fait nouveau \
+vérifiable. ATTENTION : un record ou palier VÉRIFIABLE ET CHIFFRÉ (vues, streams, ventes, \
+certification) lié à un artiste connu N'EST PAS du bruit, même si le titre ressemble à un \
+classement — classe-le normalement (souvent COMEBACK_SORTIE) et évalue sa viralité, qui est en \
+général élevée pour ce genre de record.
 
 ## Importance
 - MINEUR : anecdotique, n'affecte pas la couverture éditoriale.
@@ -90,7 +116,7 @@ Un artiste absent de cette liste n'a ni bonus ni malus explicite.
 
 ## Artistes
 Liste les noms d'artistes/groupes explicitement cités dans l'article.
-{france_note}
+{france_note}{milestone_note}
 Réponds uniquement selon le schéma JSON fourni.
 """
 
@@ -102,6 +128,16 @@ France (détection automatique sur mots-clés). Si c'est bien le cas, la catégo
 CONCERT_EVENEMENT_FRANCE. Évalue quand même normalement l'importance et la viralité.
 """
 
+_MILESTONE_NOTE = """
+
+## Note système
+Cet article a été pré-identifié comme pouvant décrire un record ou palier vérifiable (vues, \
+streams, ventes, certification) atteint par un artiste déjà répertorié dans la table de \
+référence (détection automatique). Si c'est bien le cas, ce N'EST PAS un classement racoleur : \
+la catégorie ne doit PAS être BRUIT_INUTILE — classe-le normalement (souvent COMEBACK_SORTIE) \
+et évalue l'importance et la viralité en conséquence (généralement élevée pour ce type de record).
+"""
+
 _WRITING_SYSTEM_PROMPT = """\
 Tu es l'assistant éditorial d'un média francophone spécialisé K-pop. L'article suivant a déjà \
 été classé : catégorie {category}, importance {importance}, viralité {virality}. Rédige en \
@@ -110,8 +146,9 @@ français, dans le style d'un média d'actualité :
 - `summary_fr` : un résumé de 2 phrases, ton journalistique, directement exploitable pour un \
 tri rapide.
 - `tweet_draft` : un brouillon de tweet PRÊT À PUBLIER (jamais posté automatiquement — un \
-humain le relit toujours avant). Moins de 280 caractères. Ton journalistique neutre. 1 à 2 \
-emojis maximum. Exactement 2 hashtags pertinents (ex. #KPop et le nom du groupe). En français.
+humain le relit toujours avant). 260 caractères maximum (un tag visuel sera ajouté séparément \
+devant, ne l'inclus pas). Ton journalistique neutre. 1 à 2 emojis maximum. Exactement 2 \
+hashtags pertinents (ex. #KPop et le nom du groupe). En français. {engagement_hook}
 {video_instruction}
 Réponds uniquement selon le schéma JSON fourni.
 """
@@ -121,6 +158,24 @@ _VIDEO_INSTRUCTION = """
 script vidéo — contexte, faits, ce qui rend le sujet notable.
 """
 
+# Consigne de fin de tweet, pour créer de l'engagement — varie selon la catégorie déjà connue.
+# Volontairement laissé à l'IA (contrairement au tag) : le bon accroche dépend du contenu
+# précis de l'article, un gabarit figé sonnerait vite répétitif.
+_ENGAGEMENT_HOOKS: dict[Category, str] = {
+    Category.COMEBACK_SORTIE: (
+        "Termine par une question courte qui donne envie de réagir : par exemple une "
+        "invitation à noter le son sur 10, ou à dire ce qu'on en pense."
+    ),
+    Category.SCANDALE_DRAMA: (
+        "Termine par une question courte et neutre qui invite à donner son avis sur la "
+        "situation, sans prendre parti ni sensationnaliser."
+    ),
+    Category.CONCERT_EVENEMENT_FRANCE: (
+        "Termine par une question courte qui invite les lecteurs à dire s'ils comptent y "
+        "assister."
+    ),
+}
+
 
 class GeminiAnalyzer:
     """Implémentation Gemini de l'analyse. Le reste du pipeline ne dépend que de `classify()`
@@ -129,15 +184,17 @@ class GeminiAnalyzer:
     def __init__(
         self,
         *,
-        api_key: str,
-        model: str,
+        api_keys: list[str],
+        models: list[str],
         artist_tiers: dict[str, list[str]],
-        fallback_model: str | None = None,
         min_seconds_between_calls: float = 4.5,
     ) -> None:
-        self._client = genai.Client(api_key=api_key)
-        self._model = model
-        self._fallback_model = fallback_model
+        if not api_keys:
+            raise ValueError("api_keys ne peut pas être vide.")
+        if not models:
+            raise ValueError("models ne peut pas être vide.")
+        self._clients = [genai.Client(api_key=key) for key in api_keys]
+        self._models = models
         self._artist_tiers_text = _format_artist_tiers(artist_tiers)
         # 15 RPM sur gemini-3.5-flash-lite / gemini-3.1-flash-lite -> 1 appel/4s max.
         # 4.5s laisse ~11% de marge. Espace CHAQUE appel réel (classify, write, et une
@@ -146,11 +203,12 @@ class GeminiAnalyzer:
         self._last_call_at: float | None = None
 
     def classify(
-        self, item: ArticleRecord, *, france_flag: bool
+        self, item: ArticleRecord, *, france_flag: bool, milestone_flag: bool = False
     ) -> tuple[ClassificationResult, int, int]:
         system_prompt = _CLASSIFICATION_SYSTEM_PROMPT.format(
             artist_tiers=self._artist_tiers_text,
             france_note=_FRANCE_NOTE if france_flag else "",
+            milestone_note=_MILESTONE_NOTE if milestone_flag else "",
         )
         user_content = f"Source : {item.source}\nTitre : {item.title}\nExtrait : {item.raw_summary}"
         result, tokens_in, tokens_out = self._generate_with_fallback(
@@ -169,6 +227,28 @@ class GeminiAnalyzer:
             result = ClassificationResult(
                 **{**result.model_dump(), "category": Category.CONCERT_EVENEMENT_FRANCE}
             )
+        elif milestone_flag and result.category == Category.BRUIT_INUTILE:
+            # Dernier recours : l'IA a maintenu BRUIT_INUTILE malgré la note système. On force
+            # une catégorie et une viralité par défaut plutôt que de laisser filtrer un record
+            # potentiellement très partageable — voir T13. Moins strict que le filet France
+            # (pas de catégorie unique garantie), donc une correction, pas une règle dure.
+            logger.info(
+                "Filet record/palier : catégorie forcée à COMEBACK_SORTIE pour %s (l'IA avait "
+                "maintenu BRUIT_INUTILE malgré la note système).",
+                item.url,
+            )
+            result = ClassificationResult(
+                **{
+                    **result.model_dump(),
+                    "category": Category.COMEBACK_SORTIE,
+                    "virality": Virality.ELEVE,
+                    "virality_reason": (
+                        "Filet record/palier : mention d'un record chiffré (vues/streams/"
+                        "ventes) associée à un artiste répertorié — viralité estimée par "
+                        "défaut, à ajuster si besoin."
+                    ),
+                }
+            )
         return result, tokens_in, tokens_out
 
     def write(
@@ -178,6 +258,7 @@ class GeminiAnalyzer:
             category=classification.category.value,
             importance=classification.importance.value,
             virality=classification.virality.value if classification.virality else "N/A",
+            engagement_hook=_ENGAGEMENT_HOOKS.get(classification.category, ""),
             video_instruction=_VIDEO_INSTRUCTION if route == Route.A else "",
         )
         user_content = f"Titre : {item.title}\nExtrait : {item.raw_summary}\nLien : {item.url}"
@@ -186,22 +267,31 @@ class GeminiAnalyzer:
     def _generate_with_fallback(
         self, system_prompt: str, user_content: str, schema: type[_T]
     ) -> tuple[_T, int, int]:
-        """Essaie le modèle principal ; sur 429 uniquement, retente une fois sur le modèle de
-        secours (quota indépendant — même clé API, même fournisseur, donc même format de
-        prompt et même niveau de confiance qualité). Si le secours échoue aussi, l'erreur
-        remonte normalement : le filet de sécurité existant (article repris au cycle suivant,
-        voir pipeline.py) reste la dernière protection."""
-        try:
-            return self._generate(self._model, system_prompt, user_content, schema)
-        except QuotaExceededError:
-            if not self._fallback_model:
-                raise
-            logger.warning(
-                "Quota atteint sur %s — bascule sur le modèle de secours %s.",
-                self._model,
-                self._fallback_model,
-            )
-            return self._generate(self._fallback_model, system_prompt, user_content, schema)
+        """Essaie chaque modèle de la chaîne (principal puis secours, quota indépendant mais
+        même clé API), dans l'ordre, sur la première clé. Uniquement si les trois échouent en
+        429, repart au début de la chaîne de modèles sur la clé API suivante (2e compte Google,
+        quota totalement indépendant — voir T5quinquies). Si la toute dernière combinaison
+        clé/modèle échoue aussi, l'erreur remonte normalement : le filet de sécurité existant
+        (article repris au cycle suivant, voir pipeline.py) reste la dernière protection."""
+        attempts = [
+            (key_index, model) for key_index in range(len(self._clients)) for model in self._models
+        ]
+        for attempt_index, (key_index, model) in enumerate(attempts):
+            try:
+                return self._generate(
+                    self._clients[key_index], model, system_prompt, user_content, schema
+                )
+            except QuotaExceededError:
+                if attempt_index == len(attempts) - 1:
+                    raise
+                next_key_index, next_model = attempts[attempt_index + 1]
+                logger.warning(
+                    "Quota atteint sur %s (clé n°%d) — bascule sur %s (clé n°%d).",
+                    model,
+                    key_index + 1,
+                    next_model,
+                    next_key_index + 1,
+                )
 
     def _throttle(self) -> None:
         """Espace les appels réels pour rester sous la limite RPM. Un throttle partagé entre
@@ -214,11 +304,16 @@ class GeminiAnalyzer:
         self._last_call_at = time.monotonic()
 
     def _generate(
-        self, model: str, system_prompt: str, user_content: str, schema: type[_T]
+        self,
+        client: genai.Client,
+        model: str,
+        system_prompt: str,
+        user_content: str,
+        schema: type[_T],
     ) -> tuple[_T, int, int]:
         self._throttle()
         try:
-            response = self._client.models.generate_content(
+            response = client.models.generate_content(
                 model=model,
                 contents=user_content,
                 config=types.GenerateContentConfig(
@@ -250,4 +345,5 @@ __all__ = [
     "GeminiAnalyzer",
     "load_artist_tiers",
     "matches_france_keywords",
+    "matches_viral_milestone",
 ]

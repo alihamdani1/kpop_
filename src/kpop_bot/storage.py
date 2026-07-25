@@ -154,6 +154,17 @@ def mark_sent(conn: sqlite3.Connection, article_id: int) -> None:
     conn.commit()
 
 
+def mark_filtered_sent(conn: sqlite3.Connection, article_id: int) -> None:
+    """Marque un article FILTERED comme transmis à #info-a-verifier (T13) — évite de le
+    renvoyer à chaque cycle. Statut distinct de SENT : ce n'est pas passé par Route A/B."""
+    now = dt.datetime.now(dt.UTC).isoformat()
+    conn.execute(
+        "UPDATE articles SET status = 'FILTERED_SENT', sent_at = ? WHERE id = ?",
+        (now, article_id),
+    )
+    conn.commit()
+
+
 def reset_failed_to_new(conn: sqlite3.Connection) -> int:
     """Repêche les articles FAILED pour un nouveau cycle. Stratégie simple (MVP) : on repart
     de zéro sur la classification plutôt que de distinguer précisément où l'échec a eu lieu."""

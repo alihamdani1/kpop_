@@ -43,6 +43,48 @@ class Route(StrEnum):
     IGNORED = "IGNORED"  # bruit inutile, jamais diffusé
 
 
+class TweetTag(StrEnum):
+    FLASH = "FLASH"
+    GOSSIP = "GOSSIP"
+    FRANCE = "FRANCE"
+    RELEASE = "RELEASE"
+    INFO = "INFO"
+
+
+# Préfixé au brouillon de tweet par le pipeline (voir pipeline.py) — jamais généré par l'IA,
+# pour rester garanti cohérent avec category/importance/virality déjà décidés.
+TWEET_TAG_LABELS: dict[TweetTag, str] = {
+    TweetTag.FLASH: "⚡ [FLASH]",
+    TweetTag.GOSSIP: "🍵 [GOSSIP]",
+    TweetTag.FRANCE: "🇫🇷 [FRANCE]",
+    TweetTag.RELEASE: "🎵 [RELEASE]",
+    TweetTag.INFO: "📰 [INFO]",
+}
+
+
+def determine_tweet_tag(
+    category: Category, importance: Importance, virality: Virality | None
+) -> TweetTag:
+    """Dérive le tag du tweet des champs déjà connus — aucun appel IA supplémentaire, aucun
+    risque de contredire la catégorie déjà affichée dans l'embed.
+
+    FLASH prime sur tout : une actu majeure et très virale mérite l'urgence avant son sujet,
+    quel que soit ce sujet. INFO est un repli générique distinct de RELEASE (qui reste
+    spécifique à COMEBACK_SORTIE) — non atteint en pratique aujourd'hui puisque BRUIT_INUTILE
+    est toujours IGNORED avant d'arriver ici, mais garde-fou correct si une catégorie sans
+    branche dédiée apparaît un jour.
+    """
+    if importance == Importance.MAJEUR and virality in (Virality.VIRAL, Virality.ELEVE):
+        return TweetTag.FLASH
+    if category == Category.SCANDALE_DRAMA:
+        return TweetTag.GOSSIP
+    if category == Category.CONCERT_EVENEMENT_FRANCE:
+        return TweetTag.FRANCE
+    if category == Category.COMEBACK_SORTIE:
+        return TweetTag.RELEASE
+    return TweetTag.INFO
+
+
 def determine_route(category: Category, virality: Virality | None) -> Route:
     """Détermine la route de diffusion. Décision prise en code, jamais laissée à l'IA.
 
@@ -96,10 +138,11 @@ class WritingResult(BaseModel):
 
     summary_fr: str = Field(description="2 phrases, ton journalistique, français.")
     tweet_draft: str = Field(
-        max_length=280,
+        max_length=260,  # <260 pour laisser la place au tag préfixé ensuite (max ~13 car.)
         description=(
-            "Brouillon prêt à copier-coller. Ton journalistique neutre, 1-2 emojis max, "
-            "2 hashtags pertinents, en français. Jamais publié automatiquement."
+            "Brouillon prêt à copier-coller (hors tag, ajouté séparément). Ton journalistique "
+            "neutre, 1-2 emojis max, 2 hashtags pertinents, en français. Se termine par une "
+            "question courte pour créer de l'engagement. Jamais publié automatiquement."
         ),
     )
     video_summary: str | None = Field(
@@ -124,6 +167,7 @@ class ArticleStatus(StrEnum):
     ANALYZED = "ANALYZED"
     SENT = "SENT"
     FILTERED = "FILTERED"
+    FILTERED_SENT = "FILTERED_SENT"  # bruit envoyé sur #info-a-verifier — voir T13
     FAILED = "FAILED"
 
 

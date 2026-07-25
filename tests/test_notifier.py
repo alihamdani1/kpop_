@@ -6,13 +6,15 @@ import httpx
 import pytest
 import respx
 
-from kpop_bot.models import Route
+from kpop_bot.models import Category, Importance, Route
 from kpop_bot.notifier import (
     NotificationError,
     build_embed,
     build_info_header,
+    build_review_message,
     build_tweet_header,
     notify,
+    notify_review,
     send_embed,
     send_message,
 )
@@ -110,3 +112,31 @@ def test_notify_envoie_quatre_messages_dans_l_ordre_vers_le_bon_webhook(make_art
     assert "embeds" in bodies[1]
     assert bodies[2] == {"content": "# Brouillon Tweet"}
     assert bodies[3] == {"content": "Tweet isolé, rien autour."}
+
+
+# --- Canal #info-a-verifier (T13) : message unique et allégé pour le bruit filtré. ---
+
+
+def test_build_review_message_contient_titre_source_categorie_lien(make_article):
+    article = make_article(
+        title="Article bruit",
+        source="Koreaboo",
+        category=Category.BRUIT_INUTILE,
+        importance=Importance.MINEUR,
+        url="https://www.koreaboo.com/article/bruit",
+    )
+    message = build_review_message(article)
+    assert "Article bruit" in message
+    assert "Koreaboo" in message
+    assert "BRUIT_INUTILE" in message
+    assert "MINEUR" in message
+    assert "https://www.koreaboo.com/article/bruit" in message
+
+
+@respx.mock
+def test_notify_review_envoie_un_seul_message(make_article):
+    url = "https://discord.com/api/webhooks/fake/verif"
+    route = respx.post(url).mock(return_value=httpx.Response(204))
+    article = make_article(category=Category.BRUIT_INUTILE, importance=Importance.MINEUR)
+    notify_review(article, url=url, timeout=5.0)
+    assert route.call_count == 1

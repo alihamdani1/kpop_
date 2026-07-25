@@ -26,6 +26,20 @@ class Settings(BaseSettings):
     # `_generate_with_fallback`. gemini-3.1-flash-lite est déjà validé en conditions réelles
     # (voir T5), donc un choix de secours "connu et fiable" plutôt qu'une inconnue.
     gemini_fallback_model: str = "gemini-3.1-flash-lite"
+    # 2e modèle de secours — n'intervient qu'après un 429 sur gemini_fallback_model, avant de
+    # basculer sur gemini_api_key_2 (voir T5quinquies). Quota RPM/RPD indépendant des deux
+    # modèles précédents.
+    gemini_second_fallback_model: str = "gemini-2.5-flash-lite"
+    # 2e clé API (compte Google distinct) — quota totalement indépendant de gemini_api_key.
+    # Optionnelle : absente, un seul compte est utilisé (comportement inchangé). Présente, la
+    # chaîne des 3 modèles ci-dessus est retentée sur cette clé une fois la première épuisée
+    # (429 sur les trois) — voir analyzer.py `_generate_with_fallback`.
+    gemini_api_key_2: str | None = None
+    # Salon "#info-a-verifier" — filet de dernier recours pour tout ce qui est classé
+    # BRUIT_INUTILE (voir T13). Optionnel : absent, ces articles restent simplement filtrés
+    # comme avant (comportement inchangé). Aucun appel Gemini supplémentaire — réutilise la
+    # classification déjà produite par classify().
+    discord_webhook_info_a_verifier: str | None = None
     # Espacement minimum entre deux appels Gemini réels (voir analyzer.py `_throttle`).
     # 15 RPM -> 4s/appel au maximum ; 4.5s laisse ~11% de marge. Évite de reproduire la
     # rafale qui avait déclenché un 429 en test avec --limit élevé et aucune pause.
@@ -41,6 +55,20 @@ class Settings(BaseSettings):
         "Accor Arena",
         "Stade de France",
         "Zénith",
+    ]
+
+    # Filet de sécurité record/palier viral — voir T13. Déclenché seulement si un de ces
+    # mots-clés ET un artiste de config/artist_tiers.yaml sont tous les deux présents (la
+    # combinaison des deux limite les faux positifs — un mot-clé seul serait trop générique).
+    viral_milestone_keywords: list[str] = [
+        "billion views",
+        "million views",
+        "billion streams",
+        "million streams",
+        "million copies",
+        "million albums",
+        "record high",
+        "all-time high",
     ]
 
     request_timeout_seconds: float = 15.0

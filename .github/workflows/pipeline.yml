@@ -32,8 +32,10 @@ jobs:
       - name: Exécuter le pipeline
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
           DISCORD_WEBHOOK_ROUTE_A: ${{ secrets.DISCORD_WEBHOOK_ROUTE_A }}
           DISCORD_WEBHOOK_ROUTE_B: ${{ secrets.DISCORD_WEBHOOK_ROUTE_B }}
+          DISCORD_WEBHOOK_INFO_A_VERIFIER: ${{ secrets.DISCORD_WEBHOOK_INFO_A_VERIFIER }}
         run: python -m kpop_bot run
 
       - name: Committer la base si modifiée

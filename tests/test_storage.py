@@ -131,6 +131,19 @@ def test_mark_sent(conn):
     assert sent.sent_at is not None
 
 
+def test_mark_filtered_sent(conn):
+    article_id = storage.insert_new_article(conn, _item())
+    classification = ClassificationResult(
+        category=Category.BRUIT_INUTILE, importance=Importance.MINEUR, artists=[]
+    )
+    storage.save_analysis(conn, article_id, classification, Route.IGNORED, False, None, 10, 0, "v1")
+    storage.mark_filtered_sent(conn, article_id)
+    assert storage.pending(conn, ArticleStatus.FILTERED) == []
+    [reviewed] = storage.pending(conn, ArticleStatus.FILTERED_SENT)
+    assert reviewed.sent_at is not None
+    assert reviewed.category == Category.BRUIT_INUTILE
+
+
 def test_pending_respecte_la_limite(conn):
     for i in range(5):
         storage.insert_new_article(conn, _item(fingerprint=f"fp-{i}", url=f"https://x/{i}"))

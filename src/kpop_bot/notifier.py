@@ -136,3 +136,19 @@ def notify(record: ArticleRecord, *, url_a: str, url_b: str, timeout: float, ind
     send_embed(webhook_url, build_embed(record), timeout=timeout)
     send_message(webhook_url, build_tweet_header(), timeout=timeout)
     send_message(webhook_url, record.tweet_draft, timeout=timeout)
+
+
+def build_review_message(record: ArticleRecord) -> str:
+    """Message unique et allégé pour #info-a-verifier (T13) — pas le format 4-messages
+    d'`notify()`, qui n'a de sens que pour du contenu à copier-coller. Réutilise uniquement ce
+    que `classify()` a déjà produit (titre original, catégorie, importance) : aucun appel IA
+    supplémentaire pour ce filet de sécurité."""
+    category = record.category.value if record.category else "?"
+    importance = record.importance.value if record.importance else "?"
+    return f"**{record.title}**\n{record.source} — classé {category} / {importance}\n{record.url}"
+
+
+def notify_review(record: ArticleRecord, *, url: str, timeout: float) -> None:
+    """Envoie un article filtré (BRUIT_INUTILE) vers #info-a-verifier — un seul message, sans
+    embed, pour rester léger vu le volume potentiellement élevé (voir T13)."""
+    send_message(url, build_review_message(record), timeout=timeout)
