@@ -117,15 +117,18 @@ chemin de code ne permet à l'IA de contourner cette règle.
 
 ### ✅ T2 — Configuration et secrets — FAIT
 - `settings.py` opérationnel, échoue explicitement si un secret manque (vérifié).
-- `config/sources.yaml` : **Soompi + Yonhap Culture + Koreaboo + Billboard K-Pop actifs ;
-  allkpop présent mais désactivé** (flux RSS retiré par le site, confirmé par des 404 sur 4
-  URLs candidates — aucun correctif code applicable ; Google News/RSS tiers écartés, voir
-  discussion). Koreaboo remplace allkpop et comble un vrai vide : Soompi/Yonhap Culture ne
-  couvraient quasiment aucun contenu scandale/gossip (vérifié sur 20 titres de chaque, zéro
-  `SCANDALE_DRAMA`). Billboard K-Pop ajouté ensuite — angle scandale/industrie sérieux
-  (procès, litiges), complémentaire du ton tabloïd de Koreaboo plutôt que redondant. Korea
-  Herald, KpopStarz, Korea Times, Billboard K-Town testés et écartés (flux introuvables,
-  volume trop faible, ou chevauchement éditeur).
+- `config/sources.yaml` : **Soompi + Yonhap Culture + Koreaboo + Billboard K-Pop + KpopStarz
+  actifs ; allkpop présent mais désactivé** (flux RSS retiré par le site, confirmé par des
+  404 sur 4 URLs candidates — aucun correctif code applicable ; Google News/RSS tiers
+  écartés, voir discussion). Koreaboo remplace allkpop et comble un vrai vide : Soompi/Yonhap
+  Culture ne couvraient quasiment aucun contenu scandale/gossip (vérifié sur 20 titres de
+  chaque, zéro `SCANDALE_DRAMA`). Billboard K-Pop ajouté ensuite — angle scandale/industrie
+  sérieux (procès, litiges), complémentaire du ton tabloïd de Koreaboo. **KpopStarz ajouté
+  après un vrai manque constaté** : la sortie "WET" de J.Y. Park (23/07/2026) n'était couverte
+  par aucune des 4 sources actives à l'époque — son vrai flux RSS (introuvable au premier
+  essai) a été retrouvé en inspectant le HTML de la page d'accueil, contient bien la story
+  manquée. Korea Herald, Korea Times, Korea JoongAng Daily, Billboard K-Town testés et
+  écartés (flux introuvables/inexistants, volume trop faible, ou chevauchement éditeur).
 - `config/artist_tiers.yaml` : table de départ en place.
 - `.env` réel créé par l'utilisateur avec les vraies clés — testé en conditions réelles.
 
@@ -360,7 +363,7 @@ semaine écoulée et 10 liens corrects vers les articles les plus importants env
 
 | # | Sujet | Décision |
 |---|---|---|
-| 1 | Sources RSS | **Soompi + Yonhap Culture + Koreaboo + Billboard K-Pop** actifs. **allkpop désactivé** — flux RSS mort (404 sur 4 URLs candidates), remplacé par Koreaboo (comble le vide gossip/scandale). Billboard K-Pop ajouté pour un angle scandale/industrie plus sérieux, complémentaire de Koreaboo. Korea Herald/KpopStarz/Korea Times/Billboard K-Town testés et écartés |
+| 1 | Sources RSS | **Soompi + Yonhap Culture + Koreaboo + Billboard K-Pop + KpopStarz** actifs. **allkpop désactivé** — flux RSS mort (404 sur 4 URLs candidates), remplacé par Koreaboo (comble le vide gossip/scandale). Billboard K-Pop ajouté pour un angle scandale/industrie sérieux. KpopStarz ajouté après un manque réel constaté (sortie "WET" de J.Y. Park manquée par les 4 sources précédentes) — flux trouvé en inspectant le HTML de la page (les URLs RSS devinées échouaient toutes) |
 | 2 | Cadence du cron | **Fixée à 15 min** (GitHub Actions) |
 | 3 | Filet mots-clés France | **Règle dure, hardcodée**, avant l'appel IA + réécriture forcée après coup. Mots-clés : `Paris`, `France`, `Accor Arena`, `Stade de France`, `Zénith` |
 | 4 | Volume attendu | **~150 articles/jour en production** (≈225 appels Gemini/jour). `--limit` relevé de 5 à **30** une fois le backlog réel (94 articles) constaté — voir T5ter |

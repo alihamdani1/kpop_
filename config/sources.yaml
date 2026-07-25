@@ -40,8 +40,20 @@ sources:
     # contenu scandale/juridique de niveau industrie (ex. procès HYBE) — un angle différent
     # du gossip tabloïd. Billboard K-Town (tag proche) testé aussi, mais écarté : même
     # éditeur, chevauchement de contenu trop probable sans dédup sémantique (T4bis, pas
-    # encore construite). Korea Herald et KpopStarz testés, flux introuvables/inexistants
-    # aux URLs essayées. Korea Times testé, fonctionne mais trop faible (3 items, contenu
-    # hors-sujet mélangé) pour être retenu. Vérifié manuellement le 24/07/2026.
+    # encore construite). Korea Herald introuvable aux URLs essayées ; Korea JoongAng Daily
+    # n'annonce aucun flux RSS sur son site. Korea Times testé, fonctionne mais trop faible
+    # (3 items, contenu hors-sujet mélangé) pour être retenu. Vérifié le 24/07/2026.
     url: https://www.billboard.com/t/k-pop/feed/
+    active: true
+
+  - name: KpopStarz
+    # Ajouté après un vrai manque constaté : la sortie "WET" de J.Y. Park (23/07/2026,
+    # thème officiel de Waterbomb 2026) n'était couverte par AUCUNE des 4 sources actives à
+    # l'époque. Les URLs RSS devinées (/rss.xml, /rss/all.xml, /sitemap/rss.xml, /feed)
+    # renvoyaient toutes 404. Le vrai flux, découvert en inspectant le HTML de la page
+    # d'accueil (nécessite le User-Agent navigateur — 403 sans lui) : /rss/archives/
+    # archives.xml. Fonctionne bien : 20 items, très frais, fort accent sorties/comebacks
+    # ("K-Pop Releases to Watch This Week"), contient bien la story WET manquée. Vérifié le
+    # 25/07/2026.
+    url: https://www.kpopstarz.com/rss/archives/archives.xml
     active: true
