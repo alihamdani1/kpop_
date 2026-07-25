@@ -14,6 +14,8 @@ from kpop_bot.models import (
     FetchedItem,
     Importance,
     Route,
+    TikTokCaptionSeo,
+    TikTokScriptResult,
     Virality,
     WritingResult,
 )
@@ -104,6 +106,98 @@ def test_save_analysis_route_a_devient_analyzed_avec_ecriture(conn):
     assert record.video_summary == "Résumé détaillé pour la vidéo."
     assert record.tokens_in == 120
     assert record.artists == ["Groupe X"]
+
+
+def test_save_analysis_avec_script_tiktok(conn):
+    article_id = storage.insert_new_article(conn, _item())
+    classification = ClassificationResult(
+        category=Category.CONCERT_EVENEMENT_FRANCE,
+        importance=Importance.MAJEUR,
+        virality=Virality.ELEVE,
+        virality_reason="Concert en France.",
+        artists=["Groupe X"],
+    )
+    writing = WritingResult(summary_fr="Résumé.", tweet_draft="Tweet.")
+    tiktok = TikTokScriptResult(
+        hook="Accroche.",
+        on_screen_texte="TEXTE À L'ÉCRAN",
+        script_body="Corps du script.",
+        closing_hook="Chute.",
+        visual_ideas=["Idée 1", "Idée 2"],
+        caption_seo=TikTokCaptionSeo(legende="Légende.", hashtags=["#kpop", "#comeback"]),
+    )
+    storage.save_analysis(
+        conn, article_id, classification, Route.A, True, writing, 120, 60, "v1", tiktok=tiktok
+    )
+    [record] = storage.pending(conn, ArticleStatus.ANALYZED)
+    assert record.tiktok_hook == "Accroche."
+    assert record.tiktok_on_screen_texte == "TEXTE À L'ÉCRAN"
+    assert record.tiktok_script_body == "Corps du script."
+    assert record.tiktok_closing_hook == "Chute."
+    assert record.tiktok_visual_ideas == ["Idée 1", "Idée 2"]
+    assert record.tiktok_caption_legende == "Légende."
+    assert record.tiktok_caption_hashtags == ["#kpop", "#comeback"]
+
+
+def test_save_analysis_sans_tiktok_laisse_les_champs_vides(conn):
+    article_id = storage.insert_new_article(conn, _item())
+    classification = ClassificationResult(
+        category=Category.COMEBACK_SORTIE, importance=Importance.MODERE, artists=[]
+    )
+    writing = WritingResult(summary_fr="Résumé.", tweet_draft="Tweet.")
+    storage.save_analysis(conn, article_id, classification, Route.B, False, writing, 10, 5, "v1")
+    [record] = storage.pending(conn, ArticleStatus.ANALYZED)
+    assert record.tiktok_hook is None
+    assert record.tiktok_on_screen_texte is None
+    assert record.tiktok_script_body is None
+    assert record.tiktok_visual_ideas == []
+    assert record.tiktok_caption_legende is None
+    assert record.tiktok_caption_hashtags == []
+
+
+def test_migrate_schema_ajoute_les_colonnes_manquantes(tmp_path: Path):
+    """Simule une base créée avant T14 (sans les colonnes tiktok_*) — la migration doit les
+    ajouter sans erreur, sur une vraie base déjà peuplée (comme data/kpop.db en production)."""
+    path = tmp_path / "legacy.db"
+    legacy_conn = sqlite3.connect(path)
+    legacy_conn.execute(
+        """
+        CREATE TABLE articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fingerprint TEXT NOT NULL UNIQUE,
+            source TEXT NOT NULL,
+            title TEXT NOT NULL,
+            url TEXT NOT NULL,
+            published_at TEXT NOT NULL,
+            raw_summary TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'NEW',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    legacy_conn.execute(
+        "INSERT INTO articles (fingerprint, source, title, url, published_at, raw_summary, "
+        "created_at) VALUES ('fp-legacy', 'Soompi', 'Titre', 'https://x', '2026-07-24', "
+        "'résumé', '2026-07-24')"
+    )
+    legacy_conn.commit()
+    legacy_conn.close()
+
+    conn = storage.init_db(path)  # doit migrer sans écraser la ligne déjà présente
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(articles)").fetchall()}
+    assert {
+        "tiktok_hook",
+        "tiktok_on_screen_texte",
+        "tiktok_script_body",
+        "tiktok_closing_hook",
+        "tiktok_visual_ideas",
+        "tiktok_caption_legende",
+        "tiktok_caption_hashtags",
+    } <= columns
+    row = conn.execute("SELECT * FROM articles WHERE fingerprint = 'fp-legacy'").fetchone()
+    assert row["title"] == "Titre"
+    assert row["tiktok_hook"] is None
+    conn.close()
 
 
 def test_mark_failed_puis_reset_failed_to_new(conn):

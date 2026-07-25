@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # comme avant (comportement inchangé). Aucun appel Gemini supplémentaire — réutilise la
     # classification déjà produite par classify().
     discord_webhook_info_a_verifier: str | None = None
+    # Salon dédié aux scripts TikTok — voir T14. Optionnel : absent, aucun 3e appel Gemini
+    # n'est fait (comportement identique à avant T14). Route A uniquement (mêmes articles
+    # qui reçoivent déjà video_summary).
+    discord_webhook_tiktok: str | None = None
     # Espacement minimum entre deux appels Gemini réels (voir analyzer.py `_throttle`).
     # 15 RPM -> 4s/appel au maximum ; 4.5s laisse ~11% de marge. Évite de reproduire la
     # rafale qui avait déclenché un 429 en test avec --limit élevé et aucune pause.

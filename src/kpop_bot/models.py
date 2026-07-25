@@ -151,6 +151,51 @@ class WritingResult(BaseModel):
     )
 
 
+class TikTokCaptionSeo(BaseModel):
+    """Légende + hashtags pour la publication TikTok elle-même (T14)."""
+
+    legende: str = Field(
+        description="Légende courte, mots-clés naturels de l'article, aucun emoji."
+    )
+    hashtags: list[str] = Field(
+        description="3-5 hashtags pertinents pour la niche K-pop, mêlant hashtags larges et "
+        "hashtags de niche."
+    )
+
+
+class TikTokScriptResult(BaseModel):
+    """Sortie du 3e appel IA (T14), dédié — prompt système séparé du tweet pour éviter de
+    diluer la qualité entre deux formats très différents sur un modèle lite. Déclenché
+    uniquement pour la Route A (mêmes articles qui reçoivent déjà `video_summary`), et
+    seulement si un salon TikTok dédié est configuré. Contrairement au tweet, aucun emoji
+    n'est autorisé dans aucun champ."""
+
+    hook: str = Field(
+        description="Accroche percutante, 1-2 phrases (~15-20 mots), promesse claire et "
+        "vérifiable, tenue par script_body. Aucun emoji."
+    )
+    on_screen_texte: str = Field(
+        description="Texte overlay affiché dès les 2 premières secondes, 5-8 mots maximum, "
+        "renforce le hook pour les spectateurs sans son. Aucun emoji."
+    )
+    script_body: str = Field(
+        description="Corps du script, 4-6 phrases (~60-80 mots), ton oral/dynamique, plus de "
+        "détail que le tweet. Ancré strictement dans les faits fournis, aucune invention, "
+        "aucun emoji. Doit livrer explicitement la promesse du hook."
+    )
+    closing_hook: str = Field(
+        description="Chute courte (~3-4s à l'oral), orientée déclencheur de partage (taguer "
+        "quelqu'un, question qui divise) plutôt que simple invitation à commenter. Aucun emoji."
+    )
+    visual_ideas: list[str] = Field(
+        description="3-5 suggestions courtes de plans/images pour le montage — propositions "
+        "créatives, pas des faits, la seule partie où l'improvisation est acceptée."
+    )
+    caption_seo: TikTokCaptionSeo = Field(
+        description="Légende et hashtags pour la publication TikTok elle-même."
+    )
+
+
 class FetchedItem(BaseModel):
     """Un item RSS normalisé, avant tout passage par l'IA."""
 
@@ -191,6 +236,13 @@ class ArticleRecord(BaseModel):
     summary_fr: str | None = None
     video_summary: str | None = None
     tweet_draft: str | None = None
+    tiktok_hook: str | None = None
+    tiktok_on_screen_texte: str | None = None
+    tiktok_script_body: str | None = None
+    tiktok_closing_hook: str | None = None
+    tiktok_visual_ideas: list[str] = Field(default_factory=list)
+    tiktok_caption_legende: str | None = None
+    tiktok_caption_hashtags: list[str] = Field(default_factory=list)
     artists: list[str] = Field(default_factory=list)
     tokens_in: int = 0
     tokens_out: int = 0

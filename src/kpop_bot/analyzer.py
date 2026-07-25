@@ -19,6 +19,7 @@ from kpop_bot.models import (
     Category,
     ClassificationResult,
     Route,
+    TikTokScriptResult,
     Virality,
     WritingResult,
 )
@@ -176,6 +177,82 @@ _ENGAGEMENT_HOOKS: dict[Category, str] = {
     ),
 }
 
+# Prompt dédié (T14), séparé de _WRITING_SYSTEM_PROMPT : demander au même appel de réussir un
+# tweet court et contraint ET un script plus long avec des idées de montage dilue la qualité
+# des deux sur un modèle lite — un prompt à objectif unique est plus fiable.
+#
+# Pas de schéma JSON recopié en dur dans le texte : `response_schema=TikTokScriptResult`
+# contraint déjà la sortie côté API (decoding contraint) — le redemander en prose serait
+# redondant, et si jamais les deux divergeaient, c'est toujours response_schema qui gagne.
+_TIKTOK_SYSTEM_PROMPT = """\
+Tu es scénariste pour une chaîne TikTok francophone spécialisée K-pop. L'article suivant a \
+déjà été classé : catégorie {category}, importance {importance}, viralité {virality}.
+
+Ta mission : rédiger un script court, prêt à être tourné par un humain (jamais publié \
+automatiquement), optimisé pour la rétention et le partage sur TikTok.
+
+RÈGLE ABSOLUE : toute information (chiffre, nom, événement, citation) doit provenir \
+strictement du titre et de l'extrait fournis. Si une information manque, reste plus bref \
+plutôt que d'inventer.
+
+RÈGLE ABSOLUE : aucun emoji, nulle part (hook, texte à l'écran, script, chute, légende) — \
+contrairement au tweet, qui en autorise. Le ton doit rester percutant sans smiley.
+
+STRUCTURE (le hook pose une promesse, le corps doit la tenir avant la fin — ne jamais \
+promettre une information que le corps ne livre pas) :
+
+1. `hook` (1-2 phrases, ~15-20 mots, ~5-6 secondes à l'oral) : capte l'attention en 2-3 \
+secondes — question, chiffre marquant, ou affirmation qui surprend. Formule une promesse \
+claire et vérifiable dans l'article.
+2. `on_screen_texte` (5-8 mots maximum) : texte overlay affiché dès les 2 premières secondes, \
+renforce visuellement le hook parlé (pour les spectateurs sans son).
+3. `script_body` (4-6 phrases, ~60-80 mots, ~20-25 secondes à l'oral) : ton oral et \
+dynamique, comme si on parlait à la caméra. Développe le sujet avec plus de détail que le \
+tweet déjà rédigé. Doit explicitement livrer la promesse du hook. Si le sujet le permet, \
+inclure une micro-relance vers le milieu du script (ex. « mais attends, c'est pas tout... ») \
+pour retenir l'attention jusqu'au bout.
+4. `closing_hook` (1 phrase courte, ~3-4 secondes à l'oral) : priorité au déclencheur de \
+partage plutôt qu'au simple commentaire — ex. inviter à taguer quelqu'un de concerné, ou \
+poser une question qui divise l'audience K-pop. Registre oral, cohérent avec la chute du \
+tweet déjà rédigé.
+5. `visual_ideas` (3 à 5 suggestions courtes) : plans/images pour le montage (archives, \
+zoom, texte à l'écran secondaire...). Seule partie du script où l'improvisation créative \
+est acceptée.
+6. `caption_seo` : légende courte incluant les mots-clés naturels de l'article, et 3-5 \
+hashtags pertinents pour la niche K-pop, mêlant hashtags larges et hashtags de niche.
+
+DURÉE CIBLE TOTALE : environ 30-40 secondes à l'oral (hook + script_body + closing_hook).
+
+AVANT DE RÉPONDRE : relis le hook, le script_body et le closing_hook, et vérifie qu'aucune \
+phrase ne contient une information (nom, chiffre, événement) absente du titre et de \
+l'extrait fournis, et qu'aucun emoji ne s'est glissé nulle part. Corrige si besoin.
+
+Exemple de ton attendu (article fictif, à ne jamais réutiliser tel quel — sert uniquement à \
+calibrer le ton, pas à copier la structure des phrases) :
+{{
+  "hook": "Un membre du groupe vient de battre un record que personne n'avait touché depuis \
+10 ans.",
+  "on_screen_texte": "RECORD BATTU",
+  "script_body": "Alors ce qui vient de se passer, personne ne s'y attendait. Le titre solo \
+qu'il vient de sortir a dépassé en 24h un chiffre que même les plus gros comebacks du groupe \
+n'avaient jamais atteint. Mais attends, c'est pas fini : ce record tenait depuis plus de 10 \
+ans dans l'industrie. Les fans parlent déjà d'un tournant dans sa carrière solo.",
+  "closing_hook": "Tague la personne qui va halluciner en voyant ce chiffre.",
+  "visual_ideas": [
+    "Zoom sur le compteur de vues qui grimpe",
+    "Archive du comeback précédent en comparaison",
+    "Texte à l'écran avec le chiffre exact du record",
+    "Réactions de fans en incrustation"
+  ],
+  "caption_seo": {{
+    "legende": "Il vient de battre un record vieux de 10 ans",
+    "hashtags": ["#kpop", "#kpopnews", "#comeback"]
+  }}
+}}
+
+Réponds uniquement selon le schéma JSON fourni.
+"""
+
 
 class GeminiAnalyzer:
     """Implémentation Gemini de l'analyse. Le reste du pipeline ne dépend que de `classify()`
@@ -263,6 +340,20 @@ class GeminiAnalyzer:
         )
         user_content = f"Titre : {item.title}\nExtrait : {item.raw_summary}\nLien : {item.url}"
         return self._generate_with_fallback(system_prompt, user_content, WritingResult)
+
+    def write_tiktok_script(
+        self, item: ArticleRecord, classification: ClassificationResult
+    ) -> tuple[TikTokScriptResult, int, int]:
+        """3e appel, dédié (T14) — Route A uniquement, appelé par le pipeline sur une instance
+        séparée dont l'ordre des clés API peut différer de celle de classify()/write() (voir
+        pipeline.py `_tiktok_api_keys`)."""
+        system_prompt = _TIKTOK_SYSTEM_PROMPT.format(
+            category=classification.category.value,
+            importance=classification.importance.value,
+            virality=classification.virality.value if classification.virality else "N/A",
+        )
+        user_content = f"Titre : {item.title}\nExtrait : {item.raw_summary}\nLien : {item.url}"
+        return self._generate_with_fallback(system_prompt, user_content, TikTokScriptResult)
 
     def _generate_with_fallback(
         self, system_prompt: str, user_content: str, schema: type[_T]

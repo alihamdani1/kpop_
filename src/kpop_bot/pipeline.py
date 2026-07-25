@@ -31,6 +31,10 @@ class CycleStats:
     analysis_failed: int = 0
     sent: int = 0
     send_failed: int = 0
+    tiktok_generated: int = 0
+    tiktok_generation_failed: int = 0
+    tiktok_sent: int = 0
+    tiktok_send_failed: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
     france_overrides: int = 0
@@ -45,9 +49,27 @@ class CycleStats:
             f"filtrés={self.filtered} vers_verif={self.filtered_reviewed} "
             f"échecs_analyse={self.analysis_failed} "
             f"envoyés={self.sent} échecs_envoi={self.send_failed} "
+            f"tiktok_generes={self.tiktok_generated} tiktok_echecs_gen="
+            f"{self.tiktok_generation_failed} tiktok_envoyes={self.tiktok_sent} "
+            f"tiktok_echecs_envoi={self.tiktok_send_failed} "
             f"filet_france={self.france_overrides} filet_record={self.milestone_flags} "
             f"tokens_in={self.tokens_in} tokens_out={self.tokens_out}"
         )
+
+
+def _api_keys(settings: Settings) -> list[str]:
+    keys = [settings.gemini_api_key]
+    if settings.gemini_api_key_2:
+        keys.append(settings.gemini_api_key_2)
+    return keys
+
+
+def _tiktok_api_keys(settings: Settings) -> list[str]:
+    """Mêmes clés que l'analyseur principal, mais clé 2 en priorité si elle est présente (voir
+    TODO.md T14) — la génération de scripts TikTok (Route A, volume plus faible) utilise ainsi
+    en priorité un pool de quota distinct de classify()/write(), plutôt que de n'intervenir
+    qu'en dernier recours comme le prévoit la chaîne de secours par défaut."""
+    return list(reversed(_api_keys(settings)))
 
 
 def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
@@ -65,18 +87,28 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
             stats.new += 1
 
     artist_tiers = analyzer.load_artist_tiers(settings.artist_tiers_path)
-    api_keys = [settings.gemini_api_key]
-    if settings.gemini_api_key_2:
-        api_keys.append(settings.gemini_api_key_2)
+    models_chain = [
+        settings.gemini_model,
+        settings.gemini_fallback_model,
+        settings.gemini_second_fallback_model,
+    ]
     gemini = analyzer.GeminiAnalyzer(
-        api_keys=api_keys,
-        models=[
-            settings.gemini_model,
-            settings.gemini_fallback_model,
-            settings.gemini_second_fallback_model,
-        ],
+        api_keys=_api_keys(settings),
+        models=models_chain,
         artist_tiers=artist_tiers,
         min_seconds_between_calls=settings.gemini_min_seconds_between_calls,
+    )
+    # Instance séparée, clé 2 en priorité — voir _tiktok_api_keys. None si le salon dédié
+    # n'est pas configuré : aucune instance construite, aucun appel Gemini supplémentaire.
+    gemini_tiktok = (
+        analyzer.GeminiAnalyzer(
+            api_keys=_tiktok_api_keys(settings),
+            models=models_chain,
+            artist_tiers=artist_tiers,
+            min_seconds_between_calls=settings.gemini_min_seconds_between_calls,
+        )
+        if settings.discord_webhook_tiktok
+        else None
     )
 
     pending_new = storage.pending(conn, ArticleStatus.NEW, limit=limit)
@@ -132,6 +164,30 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
                 stats.errors.append(f"write({article.url}): {exc}")
                 continue
 
+        tiktok_result = None
+        tin3 = tout3 = 0
+        if route == Route.A and gemini_tiktok is not None:
+            # Échec non bloquant : le tweet/résumé vidéo a déjà réussi, un script TikTok raté
+            # ne doit ni faire échouer l'article ni arrêter le cycle — c'est un bonus, pas un
+            # pré-requis de diffusion (voir T14).
+            try:
+                tiktok_result, tin3, tout3 = gemini_tiktok.write_tiktok_script(
+                    article, classification
+                )
+                stats.tiktok_generated += 1
+            except analyzer.QuotaExceededError:
+                logger.warning(
+                    "Quota Gemini (script TikTok) atteint pour %s — script ignoré pour cet "
+                    "article, cycle poursuivi.",
+                    article.url,
+                )
+                stats.tiktok_generation_failed += 1
+            except analyzer.AnalysisError as exc:
+                logger.warning(
+                    "Échec de génération du script TikTok pour %s : %s", article.url, exc
+                )
+                stats.tiktok_generation_failed += 1
+
         storage.save_analysis(
             conn,
             article.id,
@@ -139,13 +195,14 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
             route,
             france_flag,
             writing,
-            tin1 + tin2,
-            tout1 + tout2,
+            tin1 + tin2 + tin3,
+            tout1 + tout2 + tout3,
             analyzer.PROMPT_VERSION,
+            tiktok=tiktok_result,
         )
         stats.classified += 1
-        stats.tokens_in += tin1 + tin2
-        stats.tokens_out += tout1 + tout2
+        stats.tokens_in += tin1 + tin2 + tin3
+        stats.tokens_out += tout1 + tout2 + tout3
         if route == Route.A:
             stats.route_a += 1
         elif route == Route.B:
@@ -155,6 +212,7 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
 
     to_send = storage.pending(conn, ArticleStatus.ANALYZED)
     send_index = 0  # numérote uniquement les envois réels, voir notifier.build_info_header
+    tiktok_send_index = 0  # compteur séparé — voir notifier.notify_tiktok
     for article in to_send:
         if dry_run:
             route_label = article.route.value if article.route else "?"
@@ -175,6 +233,27 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
             storage.mark_failed(conn, article.id, str(exc))
             stats.send_failed += 1
             stats.errors.append(f"send({article.url}): {exc}")
+            continue
+
+        # Envoi TikTok best-effort, uniquement après un envoi principal réussi ci-dessus — un
+        # échec ici ne doit jamais faire revenir l'article en arrière (voir T14).
+        if (
+            settings.discord_webhook_tiktok
+            and article.route == Route.A
+            and article.tiktok_script_body
+        ):
+            tiktok_send_index += 1
+            try:
+                notifier.notify_tiktok(
+                    article,
+                    url=settings.discord_webhook_tiktok,
+                    timeout=settings.request_timeout_seconds,
+                    index=tiktok_send_index,
+                )
+                stats.tiktok_sent += 1
+            except notifier.NotificationError as exc:
+                stats.tiktok_send_failed += 1
+                stats.errors.append(f"tiktok_send({article.url}): {exc}")
 
     if settings.discord_webhook_info_a_verifier:
         to_review = storage.pending(conn, ArticleStatus.FILTERED)

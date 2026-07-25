@@ -414,6 +414,83 @@ def test_write_injecte_la_consigne_d_engagement_propre_a_la_categorie(
     assert "[FLASH]" not in captured_prompts[0]  # le tag n'est jamais demandé à l'IA
 
 
+# --- write_tiktok_script (T14) : prompt système dédié, séparé de celui du tweet. ---
+
+
+def test_write_tiktok_script_utilise_un_prompt_dedie_et_renvoie_le_schema(
+    gemini, monkeypatch, make_article
+):
+    captured_prompts: list[str] = []
+
+    def _fake_generate(*, model, contents, config):
+        captured_prompts.append(config.system_instruction)
+        return _FakeResponse(
+            {
+                "hook": "Un record vient de tomber !",
+                "on_screen_texte": "RECORD BATTU",
+                "script_body": "Le groupe X vient de franchir un nouveau palier de vues...",
+                "closing_hook": "Vous vous y attendiez ?",
+                "visual_ideas": ["Zoom sur le compteur de vues", "Archives du clip"],
+                "caption_seo": {
+                    "legende": "Un nouveau record vient de tomber",
+                    "hashtags": ["#kpop", "#kpopnews"],
+                },
+            }
+        )
+
+    monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
+    from kpop_bot.models import ClassificationResult, Importance
+
+    classification = ClassificationResult(
+        category=Category.COMEBACK_SORTIE,
+        importance=Importance.MAJEUR,
+        virality=Virality.ELEVE,
+        virality_reason="Test.",
+        artists=["Groupe X"],
+    )
+    result, tokens_in, tokens_out = gemini.write_tiktok_script(make_article(), classification)
+
+    assert result.hook == "Un record vient de tomber !"
+    assert result.on_screen_texte == "RECORD BATTU"
+    assert result.visual_ideas == ["Zoom sur le compteur de vues", "Archives du clip"]
+    assert result.caption_seo.hashtags == ["#kpop", "#kpopnews"]
+    assert tokens_in == 100
+    assert tokens_out == 42
+    # Prompt bien distinct de celui du tweet — règle "aucun emoji" propre au script TikTok.
+    assert "aucun emoji" in captured_prompts[0].lower()
+    assert "COMEBACK_SORTIE" in captured_prompts[0]
+    assert "ELEVE" in captured_prompts[0]
+
+
+def test_write_tiktok_script_gere_une_viralite_absente(gemini, monkeypatch, make_article):
+    """En pratique, une ClassificationResult valide a toujours une viralité non-nulle hors
+    BRUIT_INUTILE (voir le validator dans models.py) — mais le formatage du prompt doit rester
+    sûr si ce champ était un jour None, sans lever d'exception."""
+    captured_prompts: list[str] = []
+
+    def _fake_generate(*, model, contents, config):
+        captured_prompts.append(config.system_instruction)
+        return _FakeResponse(
+            {
+                "hook": "Accroche.",
+                "on_screen_texte": "TEXTE",
+                "script_body": "Corps.",
+                "closing_hook": "Chute.",
+                "visual_ideas": ["Idée 1"],
+                "caption_seo": {"legende": "Légende.", "hashtags": ["#kpop"]},
+            }
+        )
+
+    monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
+    from kpop_bot.models import ClassificationResult, Importance
+
+    classification = ClassificationResult(
+        category=Category.CONCERT_EVENEMENT_FRANCE, importance=Importance.MAJEUR, artists=[]
+    ).model_copy(update={"virality": None})  # contourne le validator, cas normalement inatteignable
+    gemini.write_tiktok_script(make_article(), classification)
+    assert "N/A" in captured_prompts[0]
+
+
 # --- Throttling RPM : horloge simulée, aucune vraie attente. ---
 
 

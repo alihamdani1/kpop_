@@ -459,12 +459,91 @@ recours dans `classify()` (et sa non-intervention si l'IA a déjà bien classé)
 inchangé si le webhook n'est pas configuré). ✔️ Vérifié par tests (mocks) — pas encore observé
 en conditions réelles (prochain cycle GitHub Actions, une fois le secret ajouté).
 
+### ✅ T14 — Script TikTok dédié (Route A) — FAIT
+
+**Demande** : en plus du tweet (inchangé) et de `video_summary` (conservé tel quel), générer un
+vrai script TikTok structuré (accroche + corps + idées de montage) pour les articles Route A,
+envoyé sur un salon Discord dédié, en utilisant la 2e clé API Gemini en priorité.
+
+**Architecture — 3e appel Gemini, dédié, Route A uniquement** :
+- Schéma `TikTokScriptResult` (`models.py`), **révisé une fois** après relecture par
+  l'utilisateur (voir « Itération du prompt » ci-dessous) — version finale à 6 champs : `hook`,
+  `on_screen_texte` (texte overlay), `script_body`, `closing_hook`, `visual_ideas` (liste de
+  3-5 suggestions de plans/montage), `caption_seo` (sous-objet `TikTokCaptionSeo` : `legende` +
+  `hashtags`). **Aucun emoji autorisé dans aucun champ** (contrairement au tweet) — demande
+  explicite de l'utilisateur.
+- Prompt système dédié `_TIKTOK_SYSTEM_PROMPT` (`analyzer.py`), séparé de
+  `_WRITING_SYSTEM_PROMPT` — demander au même appel un tweet court et contraint ET un script
+  plus long avec des idées de montage dilue la qualité des deux sur un modèle lite ; un prompt
+  à objectif unique est plus fiable. Structure hook→promesse tenue par le corps, budgets de
+  mots/secondes par section (indicatifs, non validés par le code), étape d'auto-vérification
+  avant réponse (relire et corriger toute invention ou emoji resté), exemple concret (few-shot)
+  pour calibrer le ton. Pas de schéma JSON recopié en dur dans le texte du prompt : redondant
+  avec `response_schema=TikTokScriptResult`, qui contraint déjà la sortie côté API et prime
+  toujours en cas de divergence.
+- Nouvelle méthode `GeminiAnalyzer.write_tiktok_script()`, réutilise `_generate_with_fallback()`
+  → hérite automatiquement de toute la chaîne de secours (modèles + clés) sans code dupliqué.
+
+**Itération du prompt (relecture utilisateur)** : l'utilisateur a proposé une version nettement
+plus élaborée que le prompt initial (structure hook/promesse, texte à l'écran, auto-vérification,
+légende SEO, exemple concret). Retour objectif donné avant implémentation : les ajouts de fond
+sont de vraies améliorations (technique de copywriting reconnue), mais **le schéma JSON décrit
+en toutes lettres dans le prompt ne servait à rien** tant que `TikTokScriptResult` (le schéma
+réellement imposé à l'API) n'était pas mis à jour en conséquence — l'API applique toujours son
+propre schéma, quoi que le texte du prompt demande en plus. Corrigé en modifiant le schéma
+Pydantic pour qu'il corresponde exactement à ce que l'utilisateur voulait produire, et en
+retirant le bloc JSON redondant du texte du prompt.
+
+**Clé 2 en priorité** (demande explicite, pas le comportement par défaut de la chaîne de
+secours) : plutôt que de modifier `_generate_with_fallback()` (logique déjà testée, on n'y
+touche pas), `pipeline.py` instancie un **2e `GeminiAnalyzer` séparé**, dédié au script TikTok,
+avec la liste de clés inversée (`_tiktok_api_keys()` : `[clé_2, clé_1]` au lieu de
+`[clé_1, clé_2]`). La chaîne de secours existante fait le reste : clé 2 devient « essayée en
+premier », clé 1 reste le repli si la clé 2 épuise toute sa chaîne de modèles. Aucune nouvelle
+logique de retry écrite. Cette 2e instance n'est construite que si `discord_webhook_tiktok` est
+configuré — sinon aucun coût, comportement strictement identique à avant T14.
+
+**Échecs non bloquants** : contrairement à `classify()`/`write()`, un échec de génération ou
+d'envoi du script TikTok (quota, erreur d'analyse, webhook en échec) ne fait ni échouer
+l'article ni arrêter le cycle — c'est un bonus une fois le tweet/résumé vidéo déjà réussis, pas
+un pré-requis de diffusion. Nouveaux compteurs dans `CycleStats` : `tiktok_generated`,
+`tiktok_generation_failed`, `tiktok_sent`, `tiktok_send_failed`.
+
+**Salon dédié** : nouveau webhook optionnel `discord_webhook_tiktok` (`settings.py`), fourni
+par l'utilisateur et déjà en place dans `.env` local. Envoyé en plus de #actus-videos (Route A),
+jamais à la place — `video_summary` reste inchangé et continue d'alimenter l'embed existant.
+4 messages (même logique que `notify()`/`notify_review`) : en-tête `# INFO {n}` (compteur
+séparé, propre à ce salon), embed contextuel (score + résumé détaillé + idées de montage — ces
+dernières **uniquement** dans ce salon, pas dans #actus-videos pour ne pas l'encombrer), en-tête
+`# Script TikTok`, puis un seul message brut regroupant accroche + texte à l'écran + corps +
+chute + légende/hashtags — tout ce qui doit être copié pour tourner et publier, en un bloc.
+
+**Migration de base** : `data/kpop.db` est réelle et versionnée avec des données en production
+— `CREATE TABLE IF NOT EXISTS` n'aurait pas ajouté les nouvelles colonnes à la table existante.
+Migration idempotente (`_migrate_schema()`, via `PRAGMA table_info` + `ALTER TABLE`) appelée à
+chaque `init_db()` : couvre à la fois les bases déjà existantes et les bases neuves (créées
+directement avec les colonnes par `_SCHEMA`, donc la migration y est un no-op). Étendue une 2e
+fois (3 colonnes en plus) lors de la révision du schéma à 6 champs, sans casser les données déjà
+migrées.
+
+**Restant à faire (côté utilisateur)** : ajouter `DISCORD_WEBHOOK_TIKTOK` comme secret GitHub
+Actions (déjà dans `.env` local, mais pas encore en production) — sans ça, le mécanisme reste
+inactif sur le cron GitHub Actions.
+
+**Fait quand** : tests sur le prompt dédié et son injection catégorie/importance/viralité
+(`test_analyzer.py`), sur la migration de schéma (simulée sur une base « pré-T14 »,
+`test_storage.py`), sur la construction des messages et l'ordre d'envoi (`test_notifier.py`),
+et des tests d'intégration bout en bout dans `test_pipeline.py` : script généré seulement pour
+la Route A, clé 2 en priorité (`_tiktok_api_keys`), échec non bloquant (article quand même
+envoyé), comportement inchangé si le webhook n'est pas configuré (aucun appel Gemini
+supplémentaire). ✔️ Vérifié par tests (mocks) — pas encore observé en conditions réelles.
+
 ---
 
 ## Ordre d'exécution — où on en est
 
 ```
-✅T1 → ✅T2 → ✅T3 → ✅T4 → ✅T5 → ✅T5ter → ✅T5quater → ✅T5quinquies → ✅T6 → ✅T7 → 🟡T8 → ✅T9 → ✅T10 → ✅T13 → T11
+✅T1 → ✅T2 → ✅T3 → ✅T4 → ✅T5 → ✅T5ter → ✅T5quater → ✅T5quinquies → ✅T6 → ✅T7 → 🟡T8 → ✅T9 → ✅T10 → ✅T13 → ✅T14 → T11
                                                                                 ▲
                                                                       on est ici — objectif initial atteint
        └──────────────── socle + métier : fait ────────────────┘   (T4bis / T5bis toujours reportées)
@@ -480,9 +559,11 @@ en conditions réelles (prochain cycle GitHub Actions, une fois le secret ajout�
 - **T4bis** (dédup sémantique) et **T5bis** (évaluation comparative Gemini/Groq) — volontairement
   repoussées, elles affinent un système qui marche déjà plutôt que de bloquer sa mise en route.
   T5bis nécessite en plus un travail d'annotation manuelle de ta part.
-- **T13** : reste à ajouter `DISCORD_WEBHOOK_INFO_A_VERIFIER` (et `GEMINI_API_KEY_2`, oublié
-  lors de T5quinquies) comme secrets **GitHub Actions** — sans ça, le pipeline en production
-  continue de tourner en mono-clé et sans salon de vérification, seul le `.env` local les a.
+- **T13** : `DISCORD_WEBHOOK_INFO_A_VERIFIER` et `GEMINI_API_KEY_2` ajoutés comme secrets
+  **GitHub Actions** — fait, confirmé par l'utilisateur.
+- **T14** : salon Discord + webhook créés, prompt révisé (schéma à 6 champs, zéro emoji) — reste
+  à ajouter `DISCORD_WEBHOOK_TIKTOK` comme secret GitHub Actions pour l'activer en production
+  (`.env` local déjà à jour).
 
 ---
 
@@ -536,6 +617,15 @@ en conditions réelles (prochain cycle GitHub Actions, une fois le secret ajout�
 | Fix de prompt seul suffisant ? | **Non** — jugement probabiliste sur un modèle *lite*, sur une distinction intrinsèquement floue (record vérifiable vs classement putaclic). Améliore le taux général mais ne garantit rien seul — voir T13 |
 | Garantie déterministe | Filet mots-clés (record) **+** artiste connu (`artist_tiers.yaml`) — mêmes principes que le filet France, mais correction de dernier recours plutôt que règle dure (pas de catégorie unique garantie) |
 | Filet de dernier recours | Salon `#info-a-verifier` — tout ce qui reste `BRUIT_INUTILE` y est envoyé, à coût Gemini nul (réutilise `classify()`, déjà exécuté pour tous les articles) |
+
+### Nouvelle décision — script TikTok (T14)
+
+| Sujet | Décision |
+|---|---|
+| Un 3e appel séparé, ou fusionné avec `write()` ? | **Séparé**, prompt système dédié — mélanger un tweet court et contraint avec un script plus long dans le même appel dilue la qualité des deux sur un modèle lite |
+| `video_summary` conservé ou remplacé ? | **Conservé tel quel** — le script TikTok est un contenu additionnel sur un nouveau salon, pas un remplacement |
+| Priorité clé 2 | 2e instance `GeminiAnalyzer` avec la liste de clés inversée (`_tiktok_api_keys`), plutôt que de modifier `_generate_with_fallback()` — même mécanisme de secours existant, sans y toucher |
+| Échec du script TikTok | Non bloquant — l'article est diffusé normalement même si son script échoue, c'est un bonus, pas un pré-requis |
 
 Plus aucun point structurant n'est ouvert sur l'architecture initiale. Les seuls ajustements
 restants (liste de sources étendue au-delà des 3 retenues, contenu précis d'`artist_tiers.yaml`,

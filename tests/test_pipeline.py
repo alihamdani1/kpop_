@@ -16,20 +16,29 @@ from kpop_bot.models import (
     FetchedItem,
     Importance,
     Route,
+    TikTokCaptionSeo,
+    TikTokScriptResult,
     TweetTag,
     Virality,
     WritingResult,
 )
-from kpop_bot.pipeline import resend_sent, run_cycle
+from kpop_bot.pipeline import _tiktok_api_keys, resend_sent, run_cycle
 from kpop_bot.settings import Settings
 
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
+    """Tous les champs optionnels sont explicités (même à None) pour rester isolé d'un vrai
+    `.env` local qui les définirait — sinon un test peut silencieusement déclencher un vrai
+    appel réseau (voir T14 : `DISCORD_WEBHOOK_TIKTOK` dans `.env` a fait échouer un test qui
+    ne s'y attendait pas, faute de cette isolation explicite)."""
     return Settings(
         gemini_api_key="test-key",
+        gemini_api_key_2=None,
         discord_webhook_route_a="https://discord.com/api/webhooks/fake/a",
         discord_webhook_route_b="https://discord.com/api/webhooks/fake/b",
+        discord_webhook_info_a_verifier=None,
+        discord_webhook_tiktok=None,
         db_path=tmp_path / "test.db",
     )
 
@@ -297,3 +306,195 @@ def test_run_cycle_sans_webhook_verif_laisse_les_articles_filtres_intacts(
     [record] = storage.pending(conn, ArticleStatus.FILTERED)
     conn.close()
     assert record.category == Category.BRUIT_INUTILE
+
+
+# --- T14 : script TikTok dédié (Route A uniquement), clé 2 en priorité, salon séparé. ---
+
+
+def test_tiktok_api_keys_inverse_l_ordre_si_2e_cle_presente(settings):
+    s = settings.model_copy(update={"gemini_api_key": "clé-1", "gemini_api_key_2": "clé-2"})
+    assert _tiktok_api_keys(s) == ["clé-2", "clé-1"]
+
+
+def test_tiktok_api_keys_sans_2e_cle_ne_contient_que_la_premiere(settings):
+    s = settings.model_copy(update={"gemini_api_key": "clé-1", "gemini_api_key_2": None})
+    assert _tiktok_api_keys(s) == ["clé-1"]
+
+
+def _seed_two_articles(settings: Settings) -> None:
+    conn = storage.init_db(settings.db_path)
+    storage.insert_new_article(
+        conn,
+        FetchedItem(
+            source="Soompi",
+            title="Concert à Paris",
+            url="https://www.soompi.com/article/route-a",
+            published_at=dt.datetime(2026, 7, 24, tzinfo=dt.UTC),
+            raw_summary="",
+            fingerprint="fp-route-a",
+        ),
+    )
+    storage.insert_new_article(
+        conn,
+        FetchedItem(
+            source="Soompi",
+            title="Petite actu",
+            url="https://www.soompi.com/article/route-b",
+            published_at=dt.datetime(2026, 7, 24, tzinfo=dt.UTC),
+            raw_summary="",
+            fingerprint="fp-route-b",
+        ),
+    )
+    conn.close()
+
+
+def _fake_classify_route_a_ou_b(self, item, *, france_flag, milestone_flag=False):
+    if item.url.endswith("route-a"):
+        classification = ClassificationResult(
+            category=Category.CONCERT_EVENEMENT_FRANCE,
+            importance=Importance.MAJEUR,
+            virality=Virality.ELEVE,
+            virality_reason="Test.",
+            artists=[],
+        )
+    else:
+        classification = ClassificationResult(
+            category=Category.COMEBACK_SORTIE,
+            importance=Importance.MODERE,
+            virality=Virality.FAIBLE,
+            virality_reason="Test.",
+            artists=[],
+        )
+    return classification, 10, 5
+
+
+def _fake_write(self, item, classification, route):
+    return WritingResult(summary_fr="Résumé.", tweet_draft="Un tweet."), 3, 2
+
+
+@respx.mock
+def test_run_cycle_genere_le_script_tiktok_uniquement_pour_route_a(
+    settings, tmp_path, monkeypatch
+):
+    sources_path = tmp_path / "sources.yaml"
+    sources_path.write_text("sources: []\n", encoding="utf-8")
+    artist_tiers_path = tmp_path / "artist_tiers.yaml"
+    artist_tiers_path.write_text("{}\n", encoding="utf-8")
+    tiktok_url = "https://discord.com/api/webhooks/fake/tiktok"
+    settings = settings.model_copy(
+        update={
+            "sources_path": sources_path,
+            "artist_tiers_path": artist_tiers_path,
+            "discord_webhook_tiktok": tiktok_url,
+        }
+    )
+    _seed_two_articles(settings)
+
+    tiktok_calls: list[str] = []
+
+    def _fake_write_tiktok(self, item, classification):
+        tiktok_calls.append(item.url)
+        return (
+            TikTokScriptResult(
+                hook="H.",
+                on_screen_texte="T.",
+                script_body="B.",
+                closing_hook="C.",
+                visual_ideas=["Idée"],
+                caption_seo=TikTokCaptionSeo(legende="L.", hashtags=["#kpop"]),
+            ),
+            5,
+            3,
+        )
+
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "classify", _fake_classify_route_a_ou_b)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write", _fake_write)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_tiktok_script", _fake_write_tiktok)
+    respx.post(settings.discord_webhook_route_a).mock(return_value=httpx.Response(204))
+    respx.post(settings.discord_webhook_route_b).mock(return_value=httpx.Response(204))
+    respx.post(tiktok_url).mock(return_value=httpx.Response(204))
+
+    stats = run_cycle(settings, limit=10, dry_run=False)
+
+    assert tiktok_calls == ["https://www.soompi.com/article/route-a"]
+    assert stats.tiktok_generated == 1
+    assert stats.tiktok_sent == 1
+
+
+@respx.mock
+def test_run_cycle_echec_generation_tiktok_n_empeche_pas_l_envoi_principal(
+    settings, tmp_path, monkeypatch
+):
+    """Un script TikTok raté est un bonus perdu, pas une raison de marquer l'article FAILED
+    ni d'arrêter le cycle — voir T14."""
+    sources_path = tmp_path / "sources.yaml"
+    sources_path.write_text("sources: []\n", encoding="utf-8")
+    artist_tiers_path = tmp_path / "artist_tiers.yaml"
+    artist_tiers_path.write_text("{}\n", encoding="utf-8")
+    tiktok_url = "https://discord.com/api/webhooks/fake/tiktok"
+    settings = settings.model_copy(
+        update={
+            "sources_path": sources_path,
+            "artist_tiers_path": artist_tiers_path,
+            "discord_webhook_tiktok": tiktok_url,
+        }
+    )
+    conn = storage.init_db(settings.db_path)
+    storage.insert_new_article(
+        conn,
+        FetchedItem(
+            source="Soompi",
+            title="Concert à Paris",
+            url="https://www.soompi.com/article/route-a",
+            published_at=dt.datetime(2026, 7, 24, tzinfo=dt.UTC),
+            raw_summary="",
+            fingerprint="fp-route-a",
+        ),
+    )
+    conn.close()
+
+    def _raise_analysis_error(self, item, classification):
+        raise analyzer.AnalysisError("boom")
+
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "classify", _fake_classify_route_a_ou_b)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write", _fake_write)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_tiktok_script", _raise_analysis_error)
+    respx.post(settings.discord_webhook_route_a).mock(return_value=httpx.Response(204))
+
+    stats = run_cycle(settings, limit=10, dry_run=False)
+
+    assert stats.tiktok_generation_failed == 1
+    assert stats.analysis_failed == 0  # l'article lui-même n'est pas en échec
+    assert stats.sent == 1  # envoyé normalement malgré l'échec du script TikTok
+
+
+@respx.mock
+def test_run_cycle_sans_webhook_tiktok_ne_genere_ni_n_envoie_rien(settings, tmp_path, monkeypatch):
+    """Comportement par défaut (webhook non configuré) inchangé : aucun 3e appel Gemini,
+    aucun envoi vers un salon TikTok — voir T14."""
+    sources_path = tmp_path / "sources.yaml"
+    sources_path.write_text("sources: []\n", encoding="utf-8")
+    artist_tiers_path = tmp_path / "artist_tiers.yaml"
+    artist_tiers_path.write_text("{}\n", encoding="utf-8")
+    settings = settings.model_copy(
+        update={
+            "sources_path": sources_path,
+            "artist_tiers_path": artist_tiers_path,
+            "discord_webhook_tiktok": None,
+        }
+    )
+    _seed_two_articles(settings)
+
+    def _fail_if_called(self, item, classification):
+        pytest.fail("write_tiktok_script ne doit jamais être appelé sans webhook configuré")
+
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "classify", _fake_classify_route_a_ou_b)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write", _fake_write)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_tiktok_script", _fail_if_called)
+    respx.post(settings.discord_webhook_route_a).mock(return_value=httpx.Response(204))
+    respx.post(settings.discord_webhook_route_b).mock(return_value=httpx.Response(204))
+
+    stats = run_cycle(settings, limit=10, dry_run=False)
+
+    assert stats.tiktok_generated == 0
+    assert stats.tiktok_sent == 0

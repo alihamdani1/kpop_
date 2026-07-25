@@ -36,6 +36,7 @@ jobs:
           DISCORD_WEBHOOK_ROUTE_A: ${{ secrets.DISCORD_WEBHOOK_ROUTE_A }}
           DISCORD_WEBHOOK_ROUTE_B: ${{ secrets.DISCORD_WEBHOOK_ROUTE_B }}
           DISCORD_WEBHOOK_INFO_A_VERIFIER: ${{ secrets.DISCORD_WEBHOOK_INFO_A_VERIFIER }}
+          DISCORD_WEBHOOK_TIKTOK: ${{ secrets.DISCORD_WEBHOOK_TIKTOK }}
         run: python -m kpop_bot run
 
       - name: Committer la base si modifiée
