@@ -582,8 +582,8 @@ réactions — l'envoi des messages reste 100 % webhook, comme le reste du pipel
                                     stocké dans `threads` (UNIQUE(topic_id, angle))
                                               │
                                               ▼
-                        notifier.notify_thread() — 1 message Discord par tweet
-                        (bloc de code ```, pour que "Copier le texte" marche tweet par tweet)
+                        notifier.notify_thread() — en-tête + tweet seul, 2 messages par tweet
+                        (jamais fusionnés, pour que "Copier le texte" marche tweet par tweet)
 ```
 
 **Modèle de données — nouvelles tables** (ajoutées à `_SCHEMA`, `CREATE TABLE IF NOT EXISTS` —
@@ -642,7 +642,7 @@ principe déjà appliqué en T14 —, dicts angle/hook), `storage.py` (schéma +
 diversifiée groupe/thème), `discord_reactions.py` **(nouveau module)** — client REST minimal
 (`seed_reactions`, `get_human_reaction`), séparé de `notifier.py` car authentification différente
 (Bot token vs webhook) et responsabilité différente (lecture, pas seulement envoi), `notifier.py`
-(embed picker + 1 message Discord par tweet, bloc de code), `thread_pipeline.py` **(nouveau
+(embed picker + en-tête/tweet isolés en 2 messages par tweet), `thread_pipeline.py` **(nouveau
 module)** — `run_thread_replenish/select/resolve(settings)`, séparé de `pipeline.py` pour ne
 prendre aucun risque de régression sur `run_cycle` déjà en prod, `settings.py` (nouveaux champs
 optionnels : `discord_bot_token`, `discord_thread_channel_id`, `discord_webhook_thread`,
@@ -770,7 +770,7 @@ T6).
 |---|---|
 | Source des Topics | **Génération libre par l'IA**, pas ancrée sur un article du pipeline existant — variété éditoriale prioritaire sur la garantie factuelle stricte. Conséquence assumée : aucun filet déterministe possible ici, la relecture humaine reste la seule protection |
 | Interaction Discord (choix parmi 3 options) | **Réactions emoji + sondage périodique** via un Bot Discord (token REST simple, pas de connexion Gateway) — de vrais boutons (Components) exigeraient un serveur HTTP public ou un bot permanent, en rupture avec le principe 100 % gratuit/sans serveur du projet |
-| Diffusion du thread final | **Webhook simple**, comme le reste du pipeline — un message Discord par tweet (bloc de code), même logique que l'isolement du `tweet_draft` en T6 |
+| Diffusion du thread final | **Webhook simple**, comme le reste du pipeline — en-tête et tweet isolés en 2 messages distincts par tweet (jamais fusionnés), même logique que l'isolement du `tweet_draft` en T6. Un bug initial (en-tête + bloc de code dans le même message) cassait le copier-coller mobile — corrigé |
 | Anti-répétition | 3 niveaux : contrainte SQL dure `UNIQUE(topic_id, angle)`, throttle groupe/thème en code (fenêtre glissante), note système côté prompt d'idéation |
 | Modèle de données | 4 niveaux Groups > Themes > Topics > Angles, mais implémenté en 3 tables seulement (`thread_topics`, `thread_selections`, `threads`) — Groups/Themes sont des attributs, pas des tables séparées, pour éviter une abstraction inutile |
 

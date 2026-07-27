@@ -293,19 +293,23 @@ def build_thread_intro_message(topic: ThreadTopicRecord, angle: ThreadAngle, tot
     )
 
 
-def build_thread_tweet_message(index: int, total: int, tweet: str) -> str:
-    """Un message par tweet, en bloc de code — pour que le bouton natif « Copier le texte » de
-    Discord copie exactement le tweet, sans que Discord n'interprète un caractère de tête (#, -,
-    *...) comme du Markdown. Même logique que l'isolement du `tweet_draft` en T6."""
-    return f"Tweet {index}/{total}\n```\n{tweet}\n```"
+def build_thread_tweet_header(index: int, total: int) -> str:
+    """En-tête précédant chaque tweet. Voir la note de `build_info_header` (T6) : élément fixe
+    séparé, jamais mélangé au contenu du tweet lui-même."""
+    return f"# Tweet {index}/{total}"
 
 
 def notify_thread(
     thread: ThreadRecord, topic: ThreadTopicRecord, *, url: str, timeout: float
 ) -> None:
-    """Diffuse le thread généré (T15) — un message Discord isolé par tweet, pour un copier-coller
-    propre tweet par tweet sur X (voir `build_thread_tweet_message`)."""
+    """Diffuse le thread généré (T15) — deux messages par tweet (en-tête, puis le tweet seul),
+    jamais fusionnés. Correction (bug initial T15) : un en-tête + bloc de code ``` dans le MÊME
+    message que le tweet cassait le copier-coller mobile — le bouton natif « Copier le texte »
+    de Discord copie tout le contenu brut du message, en-tête et balises de code compris. En
+    isolant le tweet seul dans son propre message, sans rien autour, la copie mobile récupère
+    exactement le texte du tweet — même principe déjà validé pour `tweet_draft` en T6."""
     total = len(thread.tweets)
     send_message(url, build_thread_intro_message(topic, thread.angle, total), timeout=timeout)
     for index, tweet in enumerate(thread.tweets, start=1):
-        send_message(url, build_thread_tweet_message(index, total, tweet), timeout=timeout)
+        send_message(url, build_thread_tweet_header(index, total), timeout=timeout)
+        send_message(url, tweet, timeout=timeout)

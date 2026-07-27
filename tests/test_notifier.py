@@ -25,7 +25,7 @@ from kpop_bot.notifier import (
     build_review_message,
     build_thread_intro_message,
     build_thread_selection_embed,
-    build_thread_tweet_message,
+    build_thread_tweet_header,
     build_tiktok_embed,
     build_tiktok_script_header,
     build_tiktok_script_message,
@@ -302,22 +302,27 @@ def test_build_thread_intro_message_annonce_le_nombre_de_tweets():
     assert "STORYTELLING" in message
 
 
-def test_build_thread_tweet_message_utilise_un_bloc_de_code_isole():
-    message = build_thread_tweet_message(2, 6, "Contenu du tweet.")
-    assert message.startswith("Tweet 2/6")
-    assert "```\nContenu du tweet.\n```" in message
+def test_build_thread_tweet_header_est_un_element_fixe_distinct_du_contenu():
+    assert build_thread_tweet_header(2, 6) == "# Tweet 2/6"
 
 
 @respx.mock
-def test_notify_thread_envoie_une_intro_puis_un_message_par_tweet():
+def test_notify_thread_isole_chaque_tweet_dans_son_propre_message():
+    """Régression : un en-tête + bloc de code ``` dans LE MÊME message que le tweet cassait le
+    copier-coller mobile (le bouton natif « Copier le texte » de Discord copie tout le contenu
+    brut du message). Le tweet doit être seul dans son message, rien autour — même principe que
+    tweet_draft en T6."""
     url = "https://discord.com/api/webhooks/fake/thread"
     mock = respx.post(url).mock(return_value=httpx.Response(204))
     thread = _thread(tweets=["Un.", "Deux.", "Trois."])
     notify_thread(thread, _topic(), url=url, timeout=5.0)
 
-    assert mock.call_count == 4  # 1 intro + 3 tweets
+    assert mock.call_count == 7  # 1 intro + (en-tête + tweet) * 3
     bodies = [json.loads(call.request.content) for call in mock.calls]
     assert "3 tweets" in bodies[0]["content"]
-    assert bodies[1]["content"] == "Tweet 1/3\n```\nUn.\n```"
-    assert bodies[2]["content"] == "Tweet 2/3\n```\nDeux.\n```"
-    assert bodies[3]["content"] == "Tweet 3/3\n```\nTrois.\n```"
+    assert bodies[1]["content"] == "# Tweet 1/3"
+    assert bodies[2]["content"] == "Un."  # le tweet seul, aucun bloc de code, aucun en-tête
+    assert bodies[3]["content"] == "# Tweet 2/3"
+    assert bodies[4]["content"] == "Deux."
+    assert bodies[5]["content"] == "# Tweet 3/3"
+    assert bodies[6]["content"] == "Trois."
