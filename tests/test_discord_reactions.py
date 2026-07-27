@@ -46,6 +46,29 @@ def test_seed_reactions_pose_une_reaction_par_emoji():
 
 
 @respx.mock
+def test_seed_reactions_retente_apres_rate_limit(monkeypatch):
+    """Régression : observé en conditions réelles au premier déploiement — Discord rate-limite
+    les ajouts de réaction bien plus vite que les webhooks, un 429 sur la 2e réaction posée
+    coup sur coup est attendu, pas une anomalie. seed_reactions doit retenter, pas planter tout
+    le cycle thread-select."""
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+    url_b = f"{_BASE}/channels/chan-1/messages/msg-1/reactions/{quote('🇧', safe='')}/@me"
+    respx.put(f"{_BASE}/channels/chan-1/messages/msg-1/reactions/{quote('🇦', safe='')}/@me").mock(
+        return_value=httpx.Response(204)
+    )
+    route_b = respx.put(url_b).mock(
+        side_effect=[
+            httpx.Response(429, json={"retry_after": 0.01}),
+            httpx.Response(204),
+        ]
+    )
+    seed_reactions(
+        channel_id="chan-1", message_id="msg-1", emojis=["🇦", "🇧"], bot_token="tok", timeout=5.0
+    )
+    assert route_b.call_count == 2
+
+
+@respx.mock
 def test_seed_reactions_echec_leve_discord_bot_error():
     respx.put(f"{_BASE}/channels/chan-1/messages/msg-1/reactions/{quote('🇦', safe='')}/@me").mock(
         return_value=httpx.Response(403, text="forbidden")
