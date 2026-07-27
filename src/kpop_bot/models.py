@@ -216,6 +216,145 @@ class ArticleStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class ThreadTheme(StrEnum):
+    """Thème éditorial d'un sujet de thread (T15) — distinct de `Category` (classification
+    d'articles) : un thread n'est pas rattaché à un article précis, voir `ThreadTopicIdea`."""
+
+    RIVALITE_COMPARAISON = "RIVALITE_COMPARAISON"
+    RETROSPECTIVE_CARRIERE = "RETROSPECTIVE_CARRIERE"
+    ANALYSE_COMEBACK = "ANALYSE_COMEBACK"
+    RECAP_SCANDALE = "RECAP_SCANDALE"
+    CONNEXION_FRANCE = "CONNEXION_FRANCE"
+    MYTHE_VS_REALITE = "MYTHE_VS_REALITE"
+    RECORD_ANECDOTE = "RECORD_ANECDOTE"
+    COULISSES_INDUSTRIE = "COULISSES_INDUSTRIE"
+    CULTURE_FANS = "CULTURE_FANS"
+
+
+class ThreadAngle(StrEnum):
+    """Traitement narratif appliqué à un Topic — le vrai levier de variété quand un même Topic
+    est réutilisé (voir TODO.md T15, anti-répétition niveau 1 : `UNIQUE(topic_id, angle)`)."""
+
+    CONTRARIEN = "CONTRARIEN"
+    GUIDE_PRATIQUE = "GUIDE_PRATIQUE"
+    CAS_ETUDE = "CAS_ETUDE"
+    STORYTELLING = "STORYTELLING"
+
+
+class SelectionStatus(StrEnum):
+    PENDING = "PENDING"
+    RESOLVED = "RESOLVED"
+    EXPIRED = "EXPIRED"
+
+
+class ThreadStatus(StrEnum):
+    DRAFT = "DRAFT"
+    SENT = "SENT"
+    FAILED = "FAILED"
+
+
+class ThreadTopicIdea(BaseModel):
+    """Un sujet de thread proposé par l'IA (T15) — génération libre, volontairement PAS ancrée
+    sur un article déjà collecté par le pipeline existant (décision actée : variété éditoriale
+    priorisée sur la garantie factuelle stricte). Conséquence assumée : aucun filet déterministe
+    n'est possible ici, contrairement au filet France/record — voir TODO.md T15."""
+
+    group_name: str = Field(
+        description="Groupe/artiste concerné, ou portée générale (ex. 'industrie K-pop') si le "
+        "sujet n'est pas rattaché à un act précis."
+    )
+    theme: ThreadTheme
+    title: str = Field(description="Titre court du sujet, pour l'affichage dans l'embed picker.")
+    premise: str = Field(
+        description="La promesse/l'angle de fond du sujet en 1-2 phrases — ce que le thread "
+        "devra développer, quel que soit l'angle narratif choisi ensuite."
+    )
+
+
+class TopicIdeationResult(BaseModel):
+    """Sortie de l'appel d'idéation (T15) — un lot de sujets en un seul appel Gemini, pour
+    réapprovisionner le backlog par lot plutôt qu'un appel par sujet (même principe de coût
+    maîtrisé que le digest hebdomadaire T12)."""
+
+    topics: list[ThreadTopicIdea]
+
+
+class ThreadWritingResult(BaseModel):
+    """Sortie du 2e appel IA de T15 (rédaction du thread complet), déclenchée uniquement après
+    la réaction humaine de sélection — jamais générée avant qu'un humain ait choisi parmi les
+    3 options proposées."""
+
+    tweets: list[str] = Field(
+        description="Le thread complet, dans l'ordre de publication. Chaque tweet ≤260 "
+        "caractères (la numérotation 'n/total' est ajoutée en code, jamais par l'IA — même "
+        "logique que TWEET_TAG_LABELS, pour ne jamais risquer une incohérence de comptage)."
+    )
+
+    @model_validator(mode="after")
+    def _enforce_thread_shape(self) -> ThreadWritingResult:
+        """Un thread trop court manque d'impact, un thread trop long fait décrocher — 5 à 8
+        tweets est la fourchette cible (voir TODO.md T15, stratégie de contenu viral)."""
+        if not 5 <= len(self.tweets) <= 8:
+            raise ValueError(f"Un thread doit contenir 5 à 8 tweets, reçu {len(self.tweets)}.")
+        for index, tweet in enumerate(self.tweets, start=1):
+            if len(tweet) > 260:
+                raise ValueError(
+                    f"Tweet {index}/{len(self.tweets)} dépasse 260 caractères ({len(tweet)})."
+                )
+        return self
+
+
+class ThreadTopicRecord(BaseModel):
+    """Reflet typé d'une ligne de la table `thread_topics` (T15)."""
+
+    id: int
+    group_name: str
+    theme: ThreadTheme
+    title: str
+    premise: str
+    created_at: dt.datetime
+    last_offered_at: dt.datetime | None = None
+    source: str
+
+
+class ThreadSelectionRecord(BaseModel):
+    """Reflet typé d'une ligne de la table `thread_selections` (T15) — l'état du picker
+    quotidien (3 options proposées, résolu ou non par une réaction humaine)."""
+
+    id: int
+    discord_message_id: str
+    option_a_topic_id: int
+    option_a_angle: ThreadAngle
+    option_b_topic_id: int
+    option_b_angle: ThreadAngle
+    option_c_topic_id: int
+    option_c_angle: ThreadAngle
+    status: SelectionStatus
+    resolved_topic_id: int | None = None
+    resolved_angle: ThreadAngle | None = None
+    created_at: dt.datetime
+    resolved_at: dt.datetime | None = None
+
+
+class ThreadRecord(BaseModel):
+    """Reflet typé d'une ligne de la table `threads` (T15) — sert aussi de registre de
+    consommation via la contrainte `UNIQUE(topic_id, angle)` côté SQL."""
+
+    id: int
+    selection_id: int | None = None
+    topic_id: int
+    angle: ThreadAngle
+    hook_label: str | None = None
+    tweets: list[str] = Field(default_factory=list)
+    status: ThreadStatus
+    tokens_in: int = 0
+    tokens_out: int = 0
+    prompt_version: str | None = None
+    created_at: dt.datetime
+    sent_at: dt.datetime | None = None
+    error: str | None = None
+
+
 class ArticleRecord(BaseModel):
     """Reflet typé d'une ligne de la table `articles` (lecture)."""
 

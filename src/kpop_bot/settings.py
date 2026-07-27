@@ -77,6 +77,25 @@ class Settings(BaseSettings):
 
     request_timeout_seconds: float = 15.0
 
+    # --- T15 : threads Twitter quotidiens — tous optionnels, absents = fonctionnalité inactive,
+    # comportement du reste du pipeline strictement inchangé (même principe que
+    # discord_webhook_tiktok pour T14). ---
+    # Bot Discord (Developer Portal), permissions View Channel / Read Message History /
+    # Add Reactions uniquement — l'envoi des messages reste 100 % webhook (voir notifier.py),
+    # ce token ne sert qu'à poser/lire des réactions (discord_reactions.py).
+    discord_bot_token: str | None = None
+    # Id numérique du salon où pointe discord_webhook_thread — nécessaire séparément du webhook
+    # car les endpoints REST de réactions sont scopés par channel_id, pas par webhook.
+    discord_thread_channel_id: str | None = None
+    # Webhook dédié au picker + à la diffusion du thread final (même salon).
+    discord_webhook_thread: str | None = None
+    # Seuil de réapprovisionnement du backlog de Topics (voir thread_pipeline.run_thread_replenish).
+    thread_topic_backlog_min: int = 15
+    # Taille du lot généré par appel d'idéation quand le backlog descend sous le seuil.
+    thread_ideation_batch_size: int = 12
+    # Délai avant qu'une sélection PENDING (personne n'a réagi) soit marquée EXPIRED.
+    thread_selection_ttl_hours: float = 24.0
+
 
 _settings: Settings | None = None
 

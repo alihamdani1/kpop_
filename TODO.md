@@ -538,6 +538,138 @@ la Route A, clé 2 en priorité (`_tiktok_api_keys`), échec non bloquant (artic
 envoyé), comportement inchangé si le webhook n'est pas configuré (aucun appel Gemini
 supplémentaire). ✔️ Vérifié par tests (mocks) — pas encore observé en conditions réelles.
 
+### 📝 T15 — Threads Twitter quotidiens (backlog Topics + sélection Discord + génération Gemini) — PLANIFIÉ, PAS ENCORE IMPLÉMENTÉ
+
+**Demande** : automatiser la création d'un thread Twitter par jour, avec un vrai flux de
+sélection humaine avant génération (pas un simple envoi automatique) : le système propose 3
+combinaisons (sujet, angle) jamais utilisées, la rédaction en choisit une par réaction Discord,
+puis Gemini rédige le thread complet, diffusé pour relecture avant copier-coller manuel sur X
+(même logique human-in-the-loop que `tweet_draft` — aucune intégration directe à l'API X, comme
+pour le reste du projet).
+
+**Différence de nature avec le reste du pipeline** : les Topics de thread sont **générés
+librement par l'IA** (décision actée avec l'utilisateur), pas obligatoirement ancrés sur un
+article déjà collecté. Conséquence assumée : contrairement au filet France ou au filet
+record/palier (T13), **aucun filet déterministe n'est possible ici** — il n'y a pas de source
+vérifiable à recouper. La relecture humaine avant publication reste donc la seule protection
+contre une éventuelle invention factuelle, exactement comme pour `tweet_draft` aujourd'hui. Le
+prompt de rédaction inclut malgré tout une consigne explicite de prudence (rester sur des faits
+largement connus, préférer une formulation générale à un chiffre/une citation non sûrs).
+
+**Interaction Discord — contrainte d'infrastructure** : de vrais boutons Discord (Components)
+nécessitent soit un bot à connexion Gateway permanente, soit un endpoint HTTP public
+(Interactions Endpoint) — les deux sont incompatibles avec le principe 100 % gratuit / sans
+serveur du projet (tout tourne sur des crons GitHub Actions éphémères, voir T10). Solution
+retenue : **réactions emoji + sondage périodique**, via un Bot Discord (token REST simple,
+`httpx`, aucune connexion Gateway, aucune nouvelle dépendance) qui ne fait que lire/ajouter des
+réactions — l'envoi des messages reste 100 % webhook, comme le reste du pipeline.
+
+**Flux en 2 étapes** :
+
+```
+[thread_topics]  backlog alimenté par lot (job hebdomadaire, un seul appel Gemini d'idéation)
+        │  quotidien : 3 (topic, angle) jamais consommés, diversifiés groupe/thème
+        ▼
+[thread-select] ── poste l'embed (webhook, ?wait=true pour récupérer le message_id)
+        │           + seed des réactions 🇦🇧🇨 (bot token)
+        │           enregistre thread_selections (PENDING)
+        ▼  cron fréquent — nouvelle étape ajoutée au cron 15 min existant (pipeline.yml)
+[thread-resolve] ── lit les réactions (bot token) sur les sélections PENDING
+        │
+        └─ réaction humaine détectée ──▶ Gemini write_thread(topic, angle, hook)
+                                              │
+                                              ▼  ThreadWritingResult.tweets: list[str]
+                                    stocké dans `threads` (UNIQUE(topic_id, angle))
+                                              │
+                                              ▼
+                        notifier.notify_thread() — 1 message Discord par tweet
+                        (bloc de code ```, pour que "Copier le texte" marche tweet par tweet)
+```
+
+**Modèle de données — nouvelles tables** (ajoutées à `_SCHEMA`, `CREATE TABLE IF NOT EXISTS` —
+pas de migration de colonnes nécessaire, ce sont des tables neuves) :
+
+| Table | Rôle | Colonnes clés |
+|---|---|---|
+| `thread_topics` | Backlog de sujets (Groups/Themes = attributs, pas des tables séparées) | `id, group_name, theme, title, premise, created_at, last_offered_at, source` |
+| `thread_selections` | État du picker quotidien | `id, discord_message_id, option_{a,b,c}_topic_id, option_{a,b,c}_angle, status, resolved_topic_id, resolved_angle, created_at, resolved_at` |
+| `threads` | Thread généré, sert aussi de registre de consommation | `id, selection_id, topic_id, angle, hook_label, tweets (JSON), status, tokens_in, tokens_out, prompt_version, created_at, sent_at, error` — **`UNIQUE(topic_id, angle)`** = garantie dure qu'un couple (sujet, angle) n'est jamais régénéré |
+
+**Nouveaux enums** (`models.py`, même style `StrEnum` que `Category`/`Importance`) :
+- `ThreadTheme` : RIVALITE_COMPARAISON, RETROSPECTIVE_CARRIERE, ANALYSE_COMEBACK,
+  RECAP_SCANDALE, CONNEXION_FRANCE, MYTHE_VS_REALITE, RECORD_ANECDOTE, COULISSES_INDUSTRIE,
+  CULTURE_FANS — liste de départ, extensible.
+- `ThreadAngle` : CONTRARIEN, GUIDE_PRATIQUE, CAS_ETUDE, STORYTELLING.
+- `SelectionStatus` (PENDING/RESOLVED/EXPIRED), `ThreadStatus` (DRAFT/SENT/FAILED).
+
+**Nouveaux schémas IA** : `ThreadTopicIdea` (group_name/theme/title/premise) +
+`TopicIdeationResult` (lot complet, un seul appel Gemini par réapprovisionnement) ;
+`ThreadWritingResult` (`tweets: list[str]`, validator imposant 5-8 tweets et `max_length=260`/tweet
+— même marge que `WritingResult.tweet_draft`, pour laisser la place à un préfixe "n/total" ajouté
+en code, jamais par l'IA, même logique que `TWEET_TAG_LABELS`).
+
+**Registre de hooks viraux** : pas de nouvelle table — un dict Python dans `analyzer.py` (même
+pattern que `_ENGAGEMENT_HOOKS`). Diversité pilotée en interrogeant `threads.hook_label` des N
+derniers threads et en excluant ces styles du prompt suivant.
+
+**Stratégie anti-répétition — 3 niveaux, du plus dur au plus doux** :
+1. **Dur (contrainte SQL)** : `UNIQUE(topic_id, angle)` sur `threads`.
+2. **Throttle groupe/thème (code)** : la sélection quotidienne exclut les topics dont le
+   `(group_name, theme)` a été utilisé dans une fenêtre récente (proposition : 14 jours) — le
+   vrai garde-fou puisque les Topics sont écrits librement par l'IA (donc pas garantis
+   textuellement uniques d'un lot d'idéation à l'autre).
+3. **Doux (prompt)** : l'idéation reçoit la liste des `(group_name, theme)` déjà utilisés
+   récemment en note système ("évite ces combinaisons").
+
+**Stratégie de contenu viral** (opérationnalisée dans le prompt dédié, reprend la technique déjà
+validée pour le script TikTok en T14 : hook = promesse claire, corps doit la tenir, étape
+d'auto-vérification avant réponse) :
+- Tweet 1 : chiffre marquant / affirmation contrariante / question — jamais de méta-commentaire
+  "un thread 🧵".
+- Tweets intermédiaires : un point par tweet, auto-porteur mais connecté au précédent.
+- Dernier tweet : clôture orientée partage (question qui divise, pas un appel au RT — pénalisé
+  par l'algorithme X).
+- **Angle = le vrai levier de variété** sur un même Topic réutilisable, chacun avec sa consigne
+  dédiée dans un dict séparé (comme `_ENGAGEMENT_HOOKS`) : CONTRARIEN, GUIDE_PRATIQUE,
+  CAS_ETUDE, STORYTELLING.
+- Hashtags : **différent du tweet unique existant** (2/tweet) — aucun hashtag dans le corps,
+  au plus 1-2 sur le tout dernier tweet (le spam par tweet nuit à la lisibilité d'un thread).
+- Emoji : 1 maximum par tweet, repérage visuel, pas de décoration.
+
+**Fichiers concernés** : `models.py` (enums + schémas + records typés), `analyzer.py`
+(`ideate_thread_topics()`, `write_thread()`, nouveaux prompts dédiés — un par forme de sortie,
+principe déjà appliqué en T14 —, dicts angle/hook), `storage.py` (schéma + CRUD dont la sélection
+diversifiée groupe/thème), `discord_reactions.py` **(nouveau module)** — client REST minimal
+(`seed_reactions`, `get_human_reaction`), séparé de `notifier.py` car authentification différente
+(Bot token vs webhook) et responsabilité différente (lecture, pas seulement envoi), `notifier.py`
+(embed picker + 1 message Discord par tweet, bloc de code), `thread_pipeline.py` **(nouveau
+module)** — `run_thread_replenish/select/resolve(settings)`, séparé de `pipeline.py` pour ne
+prendre aucun risque de régression sur `run_cycle` déjà en prod, `settings.py` (nouveaux champs
+optionnels : `discord_bot_token`, `discord_thread_channel_id`, `discord_webhook_thread`,
+`thread_topic_backlog_min` déf. 15, `thread_ideation_batch_size` déf. 12,
+`thread_selection_ttl_hours` déf. 24 — absents = comportement `run` existant strictement
+inchangé), `__main__.py` (sous-commandes `thread-replenish`/`thread-select`/`thread-resolve`),
+`.github/workflows/pipeline.yml` (+1 étape `thread-resolve` sur le cron 15 min existant),
+`.github/workflows/thread_select.yml` **(nouveau, cron quotidien — proposition 8h UTC)**,
+`.github/workflows/thread_replenish.yml` **(nouveau, cron hebdomadaire — proposition dimanche
+20h UTC)**.
+
+**Nouveaux secrets** : `DISCORD_BOT_TOKEN` (Bot Discord Developer Portal, permissions *View
+Channel*/*Read Message History*/*Add Reactions* — pas besoin de *Send Messages*, l'envoi reste
+webhook), `DISCORD_THREAD_CHANNEL_ID`, `DISCORD_WEBHOOK_THREAD`.
+
+**Ordre d'implémentation** : `models.py` → `storage.py` (avec tests sur la contrainte `UNIQUE` et
+le tri de désaturation `last_offered_at`) → `analyzer.py` → `discord_reactions.py` (tests
+`respx`) → `notifier.py` → `thread_pipeline.py` (tests d'intégration mockés) → `__main__.py` +
+workflows.
+
+**Fait quand** : `pytest` reste au vert (nouveaux tests + 54 existants) ; `thread-replenish
+--dry-run` puis `thread-select --dry-run` déroulent sans rien envoyer et journalisent 3 candidats
+diversifiés ; test réel une fois le Bot Discord créé et les secrets en place — réaction manuelle
+sur Discord détectée par `thread-resolve`, thread reçu avec un message par tweet, bouton "Copier
+le texte" fonctionnel sur mobile (même vérification que celle déjà faite pour `tweet_draft` en
+T6).
+
 ---
 
 ## Ordre d'exécution — où on en est
@@ -547,6 +679,9 @@ supplémentaire). ✔️ Vérifié par tests (mocks) — pas encore observé en 
                                                                                 ▲
                                                                       on est ici — objectif initial atteint
        └──────────────── socle + métier : fait ────────────────┘   (T4bis / T5bis toujours reportées)
+
+📝 T15 (threads Twitter quotidiens) — planifié, indépendant du reste (nouveau pipeline parallèle,
+   nouveaux crons dédiés), pas de dépendance bloquante sur T11/T12.
 ```
 
 **Restant concrètement** :
@@ -564,6 +699,8 @@ supplémentaire). ✔️ Vérifié par tests (mocks) — pas encore observé en 
 - **T14** : salon Discord + webhook créés, prompt révisé (schéma à 6 champs, zéro emoji) — reste
   à ajouter `DISCORD_WEBHOOK_TIKTOK` comme secret GitHub Actions pour l'activer en production
   (`.env` local déjà à jour).
+- **T15** — threads Twitter quotidiens, plan validé, pas encore codé. Nécessite en amont la
+  création d'un Bot Discord (Developer Portal) et de son webhook dédié.
 
 ---
 
@@ -626,6 +763,16 @@ supplémentaire). ✔️ Vérifié par tests (mocks) — pas encore observé en 
 | `video_summary` conservé ou remplacé ? | **Conservé tel quel** — le script TikTok est un contenu additionnel sur un nouveau salon, pas un remplacement |
 | Priorité clé 2 | 2e instance `GeminiAnalyzer` avec la liste de clés inversée (`_tiktok_api_keys`), plutôt que de modifier `_generate_with_fallback()` — même mécanisme de secours existant, sans y toucher |
 | Échec du script TikTok | Non bloquant — l'article est diffusé normalement même si son script échoue, c'est un bonus, pas un pré-requis |
+
+### Nouvelle décision — threads Twitter quotidiens (T15)
+
+| Sujet | Décision |
+|---|---|
+| Source des Topics | **Génération libre par l'IA**, pas ancrée sur un article du pipeline existant — variété éditoriale prioritaire sur la garantie factuelle stricte. Conséquence assumée : aucun filet déterministe possible ici, la relecture humaine reste la seule protection |
+| Interaction Discord (choix parmi 3 options) | **Réactions emoji + sondage périodique** via un Bot Discord (token REST simple, pas de connexion Gateway) — de vrais boutons (Components) exigeraient un serveur HTTP public ou un bot permanent, en rupture avec le principe 100 % gratuit/sans serveur du projet |
+| Diffusion du thread final | **Webhook simple**, comme le reste du pipeline — un message Discord par tweet (bloc de code), même logique que l'isolement du `tweet_draft` en T6 |
+| Anti-répétition | 3 niveaux : contrainte SQL dure `UNIQUE(topic_id, angle)`, throttle groupe/thème en code (fenêtre glissante), note système côté prompt d'idéation |
+| Modèle de données | 4 niveaux Groups > Themes > Topics > Angles, mais implémenté en 3 tables seulement (`thread_topics`, `thread_selections`, `threads`) — Groups/Themes sont des attributs, pas des tables séparées, pour éviter une abstraction inutile |
 
 Plus aucun point structurant n'est ouvert sur l'architecture initiale. Les seuls ajustements
 restants (liste de sources étendue au-delà des 3 retenues, contenu précis d'`artist_tiers.yaml`,

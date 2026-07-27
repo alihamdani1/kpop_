@@ -11,6 +11,7 @@ import sys
 
 from kpop_bot.pipeline import resend_sent, run_cycle
 from kpop_bot.settings import get_settings
+from kpop_bot.thread_pipeline import run_thread_replenish, run_thread_resolve, run_thread_select
 
 # 30 : écoule un backlog de ~94 articles en ~4 cycles plutôt que ~19 (ex-limite de 5), tout
 # en restant très sous le budget de 500 RPD (voir settings.py). L'espacement entre appels
@@ -52,6 +53,41 @@ def _build_parser() -> argparse.ArgumentParser:
         "--verbose", action="store_true", help="Active les logs de niveau DEBUG."
     )
 
+    replenish_parser = subparsers.add_parser(
+        "thread-replenish",
+        help="Réapprovisionne le backlog de Topics de threads (T15) si besoin — 1 appel Gemini.",
+    )
+    replenish_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="N'appelle pas Gemini ; journalise si un réapprovisionnement serait déclenché.",
+    )
+    replenish_parser.add_argument(
+        "--verbose", action="store_true", help="Active les logs de niveau DEBUG."
+    )
+
+    select_parser = subparsers.add_parser(
+        "thread-select",
+        help="Propose 3 (Topic, Angle) via un embed Discord + réactions (T15) — aucun appel "
+        "Gemini.",
+    )
+    select_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="N'envoie rien sur Discord ; journalise les options qui auraient été proposées.",
+    )
+    select_parser.add_argument(
+        "--verbose", action="store_true", help="Active les logs de niveau DEBUG."
+    )
+
+    resolve_parser = subparsers.add_parser(
+        "thread-resolve",
+        help="Détecte les réactions sur le picker (T15), génère et diffuse le thread choisi.",
+    )
+    resolve_parser.add_argument(
+        "--verbose", action="store_true", help="Active les logs de niveau DEBUG."
+    )
+
     return parser
 
 
@@ -79,6 +115,33 @@ def main(argv: list[str] | None = None) -> int:
         settings = get_settings()
         count = resend_sent(settings, limit=args.limit)
         log.info("%d article(s) renvoyé(s) sur Discord.", count)
+        return 0
+
+    if args.command == "thread-replenish":
+        settings = get_settings()
+        inserted = run_thread_replenish(settings, dry_run=args.dry_run)
+        log.info("Réapprovisionnement terminé — %d nouveau(x) topic(s).", inserted)
+        return 0
+
+    if args.command == "thread-select":
+        settings = get_settings()
+        posted = run_thread_select(settings, dry_run=args.dry_run)
+        log.info("Sélection quotidienne — %s.", "publiée" if posted else "ignorée")
+        return 0
+
+    if args.command == "thread-resolve":
+        settings = get_settings()
+        stats = run_thread_resolve(settings)
+        log.info(
+            "Résolution terminée — résolus=%d en_attente=%d envoyés=%d échecs_envoi=%d "
+            "échecs_génération=%d quota_atteint=%s",
+            stats.resolved,
+            stats.still_pending,
+            stats.sent,
+            stats.send_failed,
+            stats.generation_failed,
+            stats.quota_exceeded,
+        )
         return 0
 
     parser.error(f"Commande inconnue : {args.command}")

@@ -19,7 +19,12 @@ from kpop_bot.models import (
     Category,
     ClassificationResult,
     Route,
+    ThreadAngle,
+    ThreadTheme,
+    ThreadTopicRecord,
+    ThreadWritingResult,
     TikTokScriptResult,
+    TopicIdeationResult,
     Virality,
     WritingResult,
 )
@@ -172,8 +177,7 @@ _ENGAGEMENT_HOOKS: dict[Category, str] = {
         "situation, sans prendre parti ni sensationnaliser."
     ),
     Category.CONCERT_EVENEMENT_FRANCE: (
-        "Termine par une question courte qui invite les lecteurs à dire s'ils comptent y "
-        "assister."
+        "Termine par une question courte qui invite les lecteurs à dire s'ils comptent y assister."
     ),
 }
 
@@ -251,6 +255,145 @@ ans dans l'industrie. Les fans parlent déjà d'un tournant dans sa carrière so
 }}
 
 Réponds uniquement selon le schéma JSON fourni.
+"""
+
+
+# --- T15 : threads Twitter quotidiens — idéation de sujets + rédaction du thread. Prompts
+# dédiés (un par forme de sortie, même principe qu'en T14) : les Topics sont générés librement
+# par l'IA, pas ancrés sur un article du pipeline existant (décision actée, voir TODO.md T15) —
+# donc aucun filet déterministe possible ici, contrairement au filet France/record. La relecture
+# humaine avant copier-coller sur X reste la seule protection contre une éventuelle invention. ---
+
+_THREAD_THEME_DESCRIPTIONS: dict[ThreadTheme, str] = {
+    ThreadTheme.RIVALITE_COMPARAISON: "comparaison ou rivalité entre artistes/groupes/eras.",
+    ThreadTheme.RETROSPECTIVE_CARRIERE: (
+        "retour sur le parcours/l'évolution d'un artiste ou groupe."
+    ),
+    ThreadTheme.ANALYSE_COMEBACK: (
+        "analyse de fond d'une sortie musicale, au-delà de la simple annonce."
+    ),
+    ThreadTheme.RECAP_SCANDALE: "remise en contexte d'une controverse ou polémique déjà connue.",
+    ThreadTheme.CONNEXION_FRANCE: (
+        "lien entre la scène K-pop et la France (concerts, fandom, culture)."
+    ),
+    ThreadTheme.MYTHE_VS_REALITE: "déconstruction d'une idée reçue sur la K-pop ou un artiste.",
+    ThreadTheme.RECORD_ANECDOTE: "record, chiffre ou anecdote marquante remise en perspective.",
+    ThreadTheme.COULISSES_INDUSTRIE: (
+        "fonctionnement de l'industrie (contrats, agences, entraînement...)."
+    ),
+    ThreadTheme.CULTURE_FANS: "dynamiques de fandom, rituels, codes culturels des fans.",
+}
+
+
+def _format_theme_list() -> str:
+    return "\n".join(
+        f"- {theme.value} : {desc}" for theme, desc in _THREAD_THEME_DESCRIPTIONS.items()
+    )
+
+
+_THREAD_IDEATION_SYSTEM_PROMPT = """\
+Tu es responsable éditorial(e) d'un média francophone spécialisé K-pop, en charge du contenu \
+Twitter/X. Ta mission : proposer un lot de {batch_size} sujets de threads Twitter — pas \
+rattachés à une actu précise du jour, mais des sujets éditoriaux solides et récurrents sur la \
+scène K-pop (rétrospectives, comparaisons, anecdotes marquantes, coulisses de l'industrie...).
+
+## Table de référence — groupes/artistes actifs
+{artist_tiers}
+
+## Thèmes disponibles (choisis-en un par sujet)
+{themes}
+
+## Consignes
+- Chaque sujet a un `group_name` (un groupe/artiste précis de préférence, ou une portée plus \
+générale du type "industrie K-pop" si le sujet dépasse un seul act), un `theme` (voir liste \
+ci-dessus), un `title` court, et une `premise` (1-2 phrases : la promesse de fond du sujet, ce \
+qu'un thread dessus devrait démontrer ou raconter).
+- Reste sur des faits largement connus et vérifiables (pas de statistique ou de citation \
+précise dont tu n'es pas sûr·e) — un humain relira toujours le thread final avant publication, \
+mais ne pars pas d'une prémisse déjà fausse.
+- Ne propose JAMAIS un sujet dont le couple (groupe, thème) est déjà dans la liste ci-dessous — \
+ils ont été traités récemment, propose autre chose.
+
+## Combinaisons (groupe, thème) déjà traitées récemment — À ÉVITER
+{excluded_pairs}
+
+Réponds uniquement selon le schéma JSON fourni ({batch_size} sujets).
+"""
+
+_THREAD_ANGLE_INSTRUCTIONS: dict[ThreadAngle, str] = {
+    ThreadAngle.CONTRARIEN: (
+        "Défends une prise de position à contre-courant de l'avis commun sur ce sujet — sans "
+        "être gratuit ni provocateur pour provoquer : l'angle contrarien doit rester "
+        "défendable et argumenté."
+    ),
+    ThreadAngle.GUIDE_PRATIQUE: (
+        "Structure le thread comme un guide concret (« 3 choses à savoir sur... », « comment "
+        "reconnaître... ») — chaque tweet intermédiaire livre un point actionnable ou "
+        "vérifiable, pas une opinion vague."
+    ),
+    ThreadAngle.CAS_ETUDE: (
+        "Choisis UN exemple précis lié au sujet et dissèque-le en profondeur (contexte, "
+        "déroulé, conséquences) plutôt que de survoler plusieurs exemples."
+    ),
+    ThreadAngle.STORYTELLING: (
+        "Raconte le sujet comme une histoire, dans l'ordre chronologique, avec un vrai twist "
+        "ou une tension qui se dénoue vers la fin — pas une simple liste de faits."
+    ),
+}
+
+# Registre de hooks viraux (T15) — pas de table dédiée : la diversité se pilote en excluant les
+# labels déjà utilisés récemment (`storage.recent_hook_labels`), voir `_pick_hook_label`.
+_HOOK_TEMPLATES: dict[str, str] = {
+    "chiffre_marquant": "Ouvre sur un chiffre concret et surprenant lié au sujet.",
+    "affirmation_contrariante": (
+        "Ouvre sur une affirmation qui va à contre-courant de l'avis général."
+    ),
+    "question_qui_pique": "Ouvre sur une question directe que peu de gens se posent vraiment.",
+    "angle_surprise": (
+        "Ouvre en jouant sur la surprise (« Ce que tu ne savais probablement pas sur... ») "
+        "sans tomber dans le putaclic."
+    ),
+    "petite_histoire": "Ouvre en plantant une scène précise, comme le début d'une anecdote.",
+}
+
+_THREAD_WRITING_SYSTEM_PROMPT = """\
+Tu es scénariste Twitter/X pour un média francophone spécialisé K-pop. Rédige un thread complet \
+sur le sujet suivant :
+
+Groupe/portée : {group_name}
+Thème : {theme}
+Titre : {title}
+Promesse : {premise}
+
+Angle imposé : {angle_label}
+{angle_instruction}
+
+## Structure attendue
+1. Tweet 1 (hook) : capte l'attention en une phrase — chiffre marquant, affirmation \
+contrariante, ou question. JAMAIS de méta-commentaire du type « un thread 🧵 » ou « petit \
+thread sur... ». Pose une promesse claire que la suite doit tenir.
+2. Tweets intermédiaires (3 à 6) : un point par tweet, auto-porteur mais connecté au précédent \
+(ex. « mais attends, ce n'est pas tout... »).
+3. Dernier tweet : clôture orientée partage — une question qui divise ou invite à réagir, \
+jamais un appel explicite au retweet (pénalisé par l'algorithme X aujourd'hui).
+
+## Règles de forme
+- 5 à 8 tweets au total. Chaque tweet ≤260 caractères (la numérotation "n/total" sera ajoutée \
+séparément, ne l'inclus pas).
+- Aucun hashtag dans les tweets du corps. Au plus 1-2 hashtags, uniquement sur le tout dernier \
+tweet.
+- 1 emoji maximum par tweet, pour le repérage visuel — jamais de décoration.
+- Prudence factuelle : reste sur des faits largement connus/publics ; si tu n'es pas sûr·e d'un \
+chiffre ou d'une citation précise, formule plus généralement plutôt que d'inventer.
+
+## Styles de hook à éviter (déjà utilisés récemment, pour ne pas être répétitif)
+{recent_hooks}
+
+## Avant de répondre
+Relis le tweet 1 : pose-t-il une vraie promesse ? Les tweets suivants la tiennent-ils \
+explicitement avant la fin ? Corrige si besoin.
+
+Réponds uniquement selon le schéma JSON fourni (liste ordonnée de tweets).
 """
 
 
@@ -354,6 +497,54 @@ class GeminiAnalyzer:
         )
         user_content = f"Titre : {item.title}\nExtrait : {item.raw_summary}\nLien : {item.url}"
         return self._generate_with_fallback(system_prompt, user_content, TikTokScriptResult)
+
+    def ideate_thread_topics(
+        self, *, batch_size: int, excluded_pairs: set[tuple[str, str]]
+    ) -> tuple[TopicIdeationResult, int, int]:
+        """1 seul appel pour réapprovisionner tout le backlog de Topics (T15) — même principe de
+        coût maîtrisé que le digest hebdomadaire (T12) : un appel par lot, pas un par sujet."""
+        excluded_text = (
+            "\n".join(f"- {group} / {theme}" for group, theme in sorted(excluded_pairs))
+            if excluded_pairs
+            else "(aucune)"
+        )
+        system_prompt = _THREAD_IDEATION_SYSTEM_PROMPT.format(
+            batch_size=batch_size,
+            artist_tiers=self._artist_tiers_text,
+            themes=_format_theme_list(),
+            excluded_pairs=excluded_text,
+        )
+        user_content = f"Propose {batch_size} nouveaux sujets de thread."
+        return self._generate_with_fallback(system_prompt, user_content, TopicIdeationResult)
+
+    def _pick_hook_label(self, recent_hook_labels: list[str]) -> str:
+        """Exclut les styles déjà utilisés récemment (voir `storage.recent_hook_labels`) ; si
+        tous les styles ont été vus récemment (registre restreint), retombe sur le premier
+        plutôt que d'échouer — un léger risque de répétition vaut mieux qu'un cycle bloqué."""
+        available = [label for label in _HOOK_TEMPLATES if label not in recent_hook_labels]
+        return available[0] if available else next(iter(_HOOK_TEMPLATES))
+
+    def write_thread(
+        self, topic: ThreadTopicRecord, angle: ThreadAngle, *, recent_hook_labels: list[str]
+    ) -> tuple[ThreadWritingResult, str, int, int]:
+        """2e appel de T15, déclenché uniquement après la réaction humaine de sélection — jamais
+        avant. Retourne aussi le `hook_label` choisi, pour que l'appelant l'enregistre sur la
+        ligne `threads` et alimente la désaturation du prochain choix."""
+        hook_label = self._pick_hook_label(recent_hook_labels)
+        system_prompt = _THREAD_WRITING_SYSTEM_PROMPT.format(
+            group_name=topic.group_name,
+            theme=topic.theme.value,
+            title=topic.title,
+            premise=topic.premise,
+            angle_label=angle.value,
+            angle_instruction=_THREAD_ANGLE_INSTRUCTIONS[angle],
+            recent_hooks=", ".join(recent_hook_labels) if recent_hook_labels else "(aucun)",
+        )
+        user_content = f"Style de hook imposé pour le tweet 1 : {_HOOK_TEMPLATES[hook_label]}"
+        result, tokens_in, tokens_out = self._generate_with_fallback(
+            system_prompt, user_content, ThreadWritingResult
+        )
+        return result, hook_label, tokens_in, tokens_out
 
     def _generate_with_fallback(
         self, system_prompt: str, user_content: str, schema: type[_T]

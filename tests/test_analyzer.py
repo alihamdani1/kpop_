@@ -6,7 +6,7 @@ import pytest
 from google.genai import errors
 
 from kpop_bot import analyzer
-from kpop_bot.models import Category, Route, Virality
+from kpop_bot.models import Category, Route, ThreadAngle, ThreadTheme, ThreadTopicRecord, Virality
 
 # --- Filet de sécurité mots-clés France : fonction pure, aucun réseau. ---
 
@@ -531,3 +531,125 @@ def test_throttle_desactive_si_min_interval_nul(monkeypatch):
     monkeypatch.setattr(analyzer.time, "sleep", lambda _s: pytest.fail("ne doit jamais dormir"))
     instance._throttle()
     instance._throttle()  # même appelé deux fois de suite, sans délai
+
+
+# --- T15 : idéation de Topics + rédaction de thread. Génération libre, prompts dédiés. ---
+
+
+def test_ideate_thread_topics_renvoie_le_lot_et_injecte_les_couples_exclus(gemini, monkeypatch):
+    captured_prompts: list[str] = []
+
+    def _fake_generate(*, model, contents, config):
+        captured_prompts.append(config.system_instruction)
+        return _FakeResponse(
+            {
+                "topics": [
+                    {
+                        "group_name": "Groupe X",
+                        "theme": "ANALYSE_COMEBACK",
+                        "title": "Titre",
+                        "premise": "Promesse.",
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
+    result, tokens_in, tokens_out = gemini.ideate_thread_topics(
+        batch_size=1, excluded_pairs={("Groupe Y", "RECAP_SCANDALE")}
+    )
+    assert len(result.topics) == 1
+    assert result.topics[0].theme == ThreadTheme.ANALYSE_COMEBACK
+    assert tokens_in == 100
+    assert tokens_out == 42
+    assert "Groupe Y / RECAP_SCANDALE" in captured_prompts[0]
+
+
+def test_ideate_thread_topics_sans_exclusion_reste_sur(gemini, monkeypatch):
+    captured_prompts: list[str] = []
+
+    def _fake_generate(*, model, contents, config):
+        captured_prompts.append(config.system_instruction)
+        return _FakeResponse(
+            {
+                "topics": [
+                    {
+                        "group_name": "Groupe X",
+                        "theme": "ANALYSE_COMEBACK",
+                        "title": "Titre",
+                        "premise": "Promesse.",
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
+    gemini.ideate_thread_topics(batch_size=1, excluded_pairs=set())
+    assert "(aucune)" in captured_prompts[0]
+
+
+def _topic(**overrides) -> ThreadTopicRecord:
+    import datetime as dt
+
+    defaults = dict(
+        id=1,
+        group_name="Groupe X",
+        theme=ThreadTheme.ANALYSE_COMEBACK,
+        title="Titre du sujet",
+        premise="La promesse du sujet.",
+        created_at=dt.datetime(2026, 7, 24, tzinfo=dt.UTC),
+        last_offered_at=None,
+        source="ai_ideation",
+    )
+    defaults.update(overrides)
+    return ThreadTopicRecord(**defaults)
+
+
+def _thread_payload(n: int = 6) -> dict:
+    return {"tweets": [f"Tweet numéro {i}." for i in range(n)]}
+
+
+def test_write_thread_injecte_le_topic_et_l_angle(gemini, monkeypatch):
+    captured_prompts: list[str] = []
+
+    def _fake_generate(*, model, contents, config):
+        captured_prompts.append(config.system_instruction)
+        return _FakeResponse(_thread_payload())
+
+    monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
+    topic = _topic()
+    result, hook_label, tokens_in, tokens_out = gemini.write_thread(
+        topic, ThreadAngle.CONTRARIEN, recent_hook_labels=[]
+    )
+    assert len(result.tweets) == 6
+    assert hook_label in analyzer._HOOK_TEMPLATES
+    assert tokens_in == 100
+    assert tokens_out == 42
+    assert "Groupe X" in captured_prompts[0]
+    assert "CONTRARIEN" in captured_prompts[0]
+    assert analyzer._THREAD_ANGLE_INSTRUCTIONS[ThreadAngle.CONTRARIEN] in captured_prompts[0]
+
+
+def test_pick_hook_label_exclut_les_labels_recents(gemini):
+    all_labels = list(analyzer._HOOK_TEMPLATES)
+    recent = all_labels[:-1]  # tous sauf le dernier
+    assert gemini._pick_hook_label(recent) == all_labels[-1]
+
+
+def test_pick_hook_label_retombe_sur_le_premier_si_tout_est_recent(gemini):
+    all_labels = list(analyzer._HOOK_TEMPLATES)
+    assert gemini._pick_hook_label(all_labels) == all_labels[0]
+
+
+def test_write_thread_exclut_les_hooks_recents_du_choix(gemini, monkeypatch):
+    monkeypatch.setattr(
+        gemini._clients[0].models,
+        "generate_content",
+        lambda **kwargs: _FakeResponse(_thread_payload()),
+    )
+    all_labels = list(analyzer._HOOK_TEMPLATES)
+    recent = all_labels[:-1]
+    _, hook_label, _, _ = gemini.write_thread(
+        _topic(), ThreadAngle.STORYTELLING, recent_hook_labels=recent
+    )
+    assert hook_label == all_labels[-1]

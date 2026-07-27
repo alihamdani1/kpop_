@@ -1,8 +1,9 @@
-name: Pipeline K-pop
+name: Réapprovisionnement du backlog de threads (T15)
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Dimanche 20h UTC — un seul appel Gemini d'idéation, seulement si le backlog est bas.
+    - cron: "0 20 * * 0"
   workflow_dispatch:
 
 concurrency:
@@ -13,7 +14,7 @@ permissions:
   contents: write
 
 jobs:
-  run-pipeline:
+  thread-replenish:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,28 +30,13 @@ jobs:
       - name: Installer les dépendances
         run: pip install .
 
-      - name: Exécuter le pipeline
+      - name: Réapprovisionner le backlog de Topics si besoin
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
           DISCORD_WEBHOOK_ROUTE_A: ${{ secrets.DISCORD_WEBHOOK_ROUTE_A }}
           DISCORD_WEBHOOK_ROUTE_B: ${{ secrets.DISCORD_WEBHOOK_ROUTE_B }}
-          DISCORD_WEBHOOK_INFO_A_VERIFIER: ${{ secrets.DISCORD_WEBHOOK_INFO_A_VERIFIER }}
-          DISCORD_WEBHOOK_TIKTOK: ${{ secrets.DISCORD_WEBHOOK_TIKTOK }}
-        run: python -m kpop_bot run
-
-      - name: Résoudre le picker de threads Twitter (T15)
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_THREAD_CHANNEL_ID: ${{ secrets.DISCORD_THREAD_CHANNEL_ID }}
-          DISCORD_WEBHOOK_THREAD: ${{ secrets.DISCORD_WEBHOOK_THREAD }}
-          # Requis par Settings mais inutilisés par thread-resolve — évite un échec de
-          # chargement de la config si ces secrets ne sont pas (encore) définis.
-          DISCORD_WEBHOOK_ROUTE_A: ${{ secrets.DISCORD_WEBHOOK_ROUTE_A }}
-          DISCORD_WEBHOOK_ROUTE_B: ${{ secrets.DISCORD_WEBHOOK_ROUTE_B }}
-        run: python -m kpop_bot thread-resolve
+        run: python -m kpop_bot thread-replenish
 
       - name: Committer la base si modifiée
         run: |
@@ -58,7 +44,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/kpop.db
           if ! git diff --cached --quiet; then
-            git commit -m "chore: mise à jour automatique de la base (cycle pipeline)"
+            git commit -m "chore: mise à jour automatique de la base (réapprovisionnement threads T15)"
             git push
           else
             echo "Aucun changement dans la base, rien à committer."

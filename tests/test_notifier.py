@@ -1,23 +1,39 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 
 import httpx
 import pytest
 import respx
 
-from kpop_bot.models import Category, Importance, Route, Virality
+from kpop_bot.models import (
+    Category,
+    Importance,
+    Route,
+    ThreadAngle,
+    ThreadRecord,
+    ThreadStatus,
+    ThreadTheme,
+    ThreadTopicRecord,
+    Virality,
+)
 from kpop_bot.notifier import (
     NotificationError,
     build_embed,
     build_info_header,
     build_review_message,
+    build_thread_intro_message,
+    build_thread_selection_embed,
+    build_thread_tweet_message,
     build_tiktok_embed,
     build_tiktok_script_header,
     build_tiktok_script_message,
     build_tweet_header,
     notify,
     notify_review,
+    notify_thread,
+    notify_thread_selection,
     notify_tiktok,
     send_embed,
     send_message,
@@ -211,3 +227,97 @@ def test_notify_tiktok_envoie_quatre_messages_dans_l_ordre(make_article):
     assert "embeds" in bodies[1]
     assert bodies[2] == {"content": "# Script TikTok"}
     assert "Accroche." in bodies[3]["content"]
+
+
+# --- Threads Twitter quotidiens (T15) : picker (webhook + réactions bot) et diffusion finale. ---
+
+
+def _topic(**overrides) -> ThreadTopicRecord:
+    defaults = dict(
+        id=1,
+        group_name="Groupe X",
+        theme=ThreadTheme.ANALYSE_COMEBACK,
+        title="Titre du sujet",
+        premise="La promesse du sujet.",
+        created_at=dt.datetime(2026, 7, 24, tzinfo=dt.UTC),
+        last_offered_at=None,
+        source="ai_ideation",
+    )
+    defaults.update(overrides)
+    return ThreadTopicRecord(**defaults)
+
+
+def _thread(**overrides) -> ThreadRecord:
+    defaults = dict(
+        id=1,
+        selection_id=1,
+        topic_id=1,
+        angle=ThreadAngle.CONTRARIEN,
+        hook_label="chiffre_marquant",
+        tweets=["Premier tweet.", "Deuxième tweet.", "Troisième tweet."],
+        status=ThreadStatus.DRAFT,
+        tokens_in=10,
+        tokens_out=5,
+        prompt_version="v1",
+        created_at=dt.datetime(2026, 7, 24, tzinfo=dt.UTC),
+        sent_at=None,
+        error=None,
+    )
+    defaults.update(overrides)
+    return ThreadRecord(**defaults)
+
+
+def test_build_thread_selection_embed_contient_les_3_options():
+    options = [
+        (_topic(title="Sujet A"), ThreadAngle.CONTRARIEN),
+        (_topic(title="Sujet B"), ThreadAngle.GUIDE_PRATIQUE),
+        (_topic(title="Sujet C"), ThreadAngle.CAS_ETUDE),
+    ]
+    embed = build_thread_selection_embed(options)
+    assert len(embed["fields"]) == 3
+    assert embed["fields"][0]["name"] == "🇦 Sujet A"
+    assert embed["fields"][1]["name"] == "🇧 Sujet B"
+    assert embed["fields"][2]["name"] == "🇨 Sujet C"
+    assert "CONTRARIEN" in embed["fields"][0]["value"]
+
+
+@respx.mock
+def test_notify_thread_selection_retourne_l_id_du_message():
+    url = "https://discord.com/api/webhooks/fake/thread"
+    respx.post(url).mock(return_value=httpx.Response(200, json={"id": "1234567890", "content": ""}))
+    options = [
+        (_topic(title="Sujet A"), ThreadAngle.CONTRARIEN),
+        (_topic(title="Sujet B"), ThreadAngle.GUIDE_PRATIQUE),
+        (_topic(title="Sujet C"), ThreadAngle.CAS_ETUDE),
+    ]
+    message_id = notify_thread_selection(options, url=url, timeout=5.0)
+    assert message_id == "1234567890"
+    assert "wait=true" in str(respx.calls[0].request.url)
+
+
+def test_build_thread_intro_message_annonce_le_nombre_de_tweets():
+    message = build_thread_intro_message(_topic(title="Sujet A"), ThreadAngle.STORYTELLING, 6)
+    assert "6 tweets" in message
+    assert "Sujet A" in message
+    assert "STORYTELLING" in message
+
+
+def test_build_thread_tweet_message_utilise_un_bloc_de_code_isole():
+    message = build_thread_tweet_message(2, 6, "Contenu du tweet.")
+    assert message.startswith("Tweet 2/6")
+    assert "```\nContenu du tweet.\n```" in message
+
+
+@respx.mock
+def test_notify_thread_envoie_une_intro_puis_un_message_par_tweet():
+    url = "https://discord.com/api/webhooks/fake/thread"
+    mock = respx.post(url).mock(return_value=httpx.Response(204))
+    thread = _thread(tweets=["Un.", "Deux.", "Trois."])
+    notify_thread(thread, _topic(), url=url, timeout=5.0)
+
+    assert mock.call_count == 4  # 1 intro + 3 tweets
+    bodies = [json.loads(call.request.content) for call in mock.calls]
+    assert "3 tweets" in bodies[0]["content"]
+    assert bodies[1]["content"] == "Tweet 1/3\n```\nUn.\n```"
+    assert bodies[2]["content"] == "Tweet 2/3\n```\nDeux.\n```"
+    assert bodies[3]["content"] == "Tweet 3/3\n```\nTrois.\n```"

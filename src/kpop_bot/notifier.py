@@ -19,7 +19,15 @@ import time
 
 import httpx
 
-from kpop_bot.models import VIRALITY_BADGES, ArticleRecord, Route, Virality
+from kpop_bot.models import (
+    VIRALITY_BADGES,
+    ArticleRecord,
+    Route,
+    ThreadAngle,
+    ThreadRecord,
+    ThreadTopicRecord,
+    Virality,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -210,3 +218,94 @@ def notify_tiktok(record: ArticleRecord, *, url: str, timeout: float, index: int
     send_embed(url, build_tiktok_embed(record), timeout=timeout)
     send_message(url, build_tiktok_script_header(), timeout=timeout)
     send_message(url, build_tiktok_script_message(record), timeout=timeout)
+
+
+# --- Threads Twitter quotidiens (T15) — picker Discord (webhook + réactions bot) et diffusion
+# du thread final. Voir discord_reactions.py pour la lecture/pose des réactions (auth Bot
+# distincte du webhook utilisé ici). ---
+
+_THREAD_OPTION_EMOJIS = ["🇦", "🇧", "🇨"]
+
+
+def build_thread_selection_embed(options: list[tuple[ThreadTopicRecord, ThreadAngle]]) -> dict:
+    """Embed du picker quotidien (T15) — exactement 3 options (topic, angle), dans l'ordre
+    A/B/C. Aucun appel Gemini à ce stade : uniquement des topics déjà en backlog."""
+    fields = [
+        {
+            "name": f"{emoji} {topic.title}",
+            "value": (
+                f"**Groupe/portée** : {topic.group_name}\n"
+                f"**Thème** : {topic.theme.value}\n"
+                f"**Angle** : {angle.value}\n"
+                f"{topic.premise}"
+            ),
+            "inline": False,
+        }
+        for emoji, (topic, angle) in zip(_THREAD_OPTION_EMOJIS, options, strict=True)
+    ]
+    return {
+        "title": "🧵 Thread du jour — choisis un sujet",
+        "description": "Réagis avec 🇦, 🇧 ou 🇨 pour lancer la rédaction du thread choisi.",
+        "color": 0x1DA1F2,
+        "fields": fields,
+    }
+
+
+def _post_webhook_wait(webhook_url: str, payload: dict, *, timeout: float) -> dict:
+    """Variante de `_post_webhook` avec `?wait=true`, pour récupérer le message Discord créé
+    (son id) — nécessaire pour le picker T15 dont on doit ensuite lire les réactions dessus.
+    Même gestion de rate-limit que `_post_webhook`."""
+    separator = "&" if "?" in webhook_url else "?"
+    url = f"{webhook_url}{separator}wait=true"
+    for attempt in range(1, _MAX_RETRIES + 1):
+        response = httpx.post(url, json=payload, timeout=timeout)
+        if response.status_code in (200, 201):
+            return response.json()
+        if response.status_code == 429:
+            retry_after = float(response.json().get("retry_after", 1.0))
+            logger.warning(
+                "Rate-limit Discord (tentative %d/%d) — pause %.1fs.",
+                attempt,
+                _MAX_RETRIES,
+                retry_after,
+            )
+            time.sleep(retry_after)
+            continue
+        raise NotificationError(
+            f"Webhook Discord en échec ({response.status_code}) : {response.text[:300]}"
+        )
+    raise NotificationError("Webhook Discord toujours rate-limité après plusieurs tentatives.")
+
+
+def notify_thread_selection(
+    options: list[tuple[ThreadTopicRecord, ThreadAngle]], *, url: str, timeout: float
+) -> str:
+    """Poste l'embed picker et retourne l'id du message Discord créé — à transmettre à
+    `discord_reactions.seed_reactions` puis à enregistrer dans `thread_selections`."""
+    embed = build_thread_selection_embed(options)
+    message = _post_webhook_wait(url, {"embeds": [embed]}, timeout=timeout)
+    return str(message["id"])
+
+
+def build_thread_intro_message(topic: ThreadTopicRecord, angle: ThreadAngle, total: int) -> str:
+    return (
+        f"# Thread du jour ({total} tweets)\n**{topic.title}** — {topic.group_name} / {angle.value}"
+    )
+
+
+def build_thread_tweet_message(index: int, total: int, tweet: str) -> str:
+    """Un message par tweet, en bloc de code — pour que le bouton natif « Copier le texte » de
+    Discord copie exactement le tweet, sans que Discord n'interprète un caractère de tête (#, -,
+    *...) comme du Markdown. Même logique que l'isolement du `tweet_draft` en T6."""
+    return f"Tweet {index}/{total}\n```\n{tweet}\n```"
+
+
+def notify_thread(
+    thread: ThreadRecord, topic: ThreadTopicRecord, *, url: str, timeout: float
+) -> None:
+    """Diffuse le thread généré (T15) — un message Discord isolé par tweet, pour un copier-coller
+    propre tweet par tweet sur X (voir `build_thread_tweet_message`)."""
+    total = len(thread.tweets)
+    send_message(url, build_thread_intro_message(topic, thread.angle, total), timeout=timeout)
+    for index, tweet in enumerate(thread.tweets, start=1):
+        send_message(url, build_thread_tweet_message(index, total, tweet), timeout=timeout)

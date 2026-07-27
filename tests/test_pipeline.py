@@ -373,9 +373,7 @@ def _fake_write(self, item, classification, route):
 
 
 @respx.mock
-def test_run_cycle_genere_le_script_tiktok_uniquement_pour_route_a(
-    settings, tmp_path, monkeypatch
-):
+def test_run_cycle_genere_le_script_tiktok_uniquement_pour_route_a(settings, tmp_path, monkeypatch):
     sources_path = tmp_path / "sources.yaml"
     sources_path.write_text("sources: []\n", encoding="utf-8")
     artist_tiers_path = tmp_path / "artist_tiers.yaml"
