@@ -15,6 +15,9 @@ from kpop_bot.settings import Settings
 logger = logging.getLogger(__name__)
 
 _OPTION_EMOJIS = ["🇦", "🇧", "🇨"]
+# Photos alternatives envoyées en plus du thread (T16bis) — pour substituer une image sur un
+# tweet précis avant publication manuelle sur X.
+_EXTRA_IMAGE_COUNT = 5
 
 
 def _thread_api_keys(settings: Settings) -> list[str]:
@@ -399,6 +402,13 @@ def run_thread_resolve(settings: Settings) -> ThreadResolveStats:
                     concept_id=topic.concept_id,
                     count=len(thread.tweets),
                 )
+                extra_image_paths = media_library.select_extra_images(
+                    settings.media_library_path,
+                    group_name=topic.group_name,
+                    concept_id=topic.concept_id,
+                    exclude=image_paths,
+                    count=_EXTRA_IMAGE_COUNT,
+                )
                 try:
                     notifier.notify_thread(
                         thread,
@@ -406,6 +416,7 @@ def run_thread_resolve(settings: Settings) -> ThreadResolveStats:
                         url=settings.discord_webhook_thread,
                         timeout=settings.request_timeout_seconds,
                         image_paths=image_paths,
+                        extra_image_paths=extra_image_paths,
                     )
                     storage.mark_thread_sent(conn, thread.id)
                     stats.sent += 1

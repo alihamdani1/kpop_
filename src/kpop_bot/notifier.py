@@ -138,24 +138,37 @@ def send_message(webhook_url: str, content: str, *, timeout: float) -> None:
     _post_webhook(webhook_url, {"content": content}, timeout=timeout)
 
 
-def _post_webhook_with_file(
-    webhook_url: str, content: str, image_path: Path, *, timeout: float
+def _post_webhook_with_files(
+    webhook_url: str, content: str, image_paths: list[Path], *, timeout: float
 ) -> None:
-    """Poste un message texte + une image jointe dans la même requête (multipart, T16) — même
-    gestion du rate-limit que `_post_webhook`. L'image ne remplace jamais `_post_webhook` pour
-    les messages sans pièce jointe : Discord exige un encodage différent (`data`/`files`) dès
-    qu'un fichier est joint, d'où une fonction dédiée plutôt qu'un paramètre optionnel sur
-    `_post_webhook`."""
-    mime_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
+    """Poste un message texte + une ou plusieurs images jointes dans la même requête (multipart,
+    T16/T16bis) — même gestion du rate-limit que `_post_webhook`. Discord exige un encodage
+    différent (`data`/`files`) dès qu'un fichier est joint, d'où une fonction dédiée plutôt qu'un
+    paramètre optionnel sur `_post_webhook`."""
     payload_json = json.dumps({"content": content}, ensure_ascii=False)
     for attempt in range(1, _MAX_RETRIES + 1):
-        with image_path.open("rb") as image_file:
+        opened = [path.open("rb") for path in image_paths]
+        try:
+            files = [
+                (
+                    f"files[{index}]",
+                    (
+                        path.name,
+                        handle,
+                        mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+                    ),
+                )
+                for index, (path, handle) in enumerate(zip(image_paths, opened, strict=True))
+            ]
             response = httpx.post(
                 webhook_url,
                 data={"payload_json": payload_json},
-                files={"file": (image_path.name, image_file, mime_type)},
+                files=files,
                 timeout=timeout,
             )
+        finally:
+            for handle in opened:
+                handle.close()
         if response.status_code in (200, 204):
             return
         if response.status_code == 429:
@@ -177,7 +190,13 @@ def _post_webhook_with_file(
 def send_message_with_image(
     webhook_url: str, content: str, image_path: Path, *, timeout: float
 ) -> None:
-    _post_webhook_with_file(webhook_url, content, image_path, timeout=timeout)
+    _post_webhook_with_files(webhook_url, content, [image_path], timeout=timeout)
+
+
+def send_message_with_images(
+    webhook_url: str, content: str, image_paths: list[Path], *, timeout: float
+) -> None:
+    _post_webhook_with_files(webhook_url, content, image_paths, timeout=timeout)
 
 
 def notify(record: ArticleRecord, *, url_a: str, url_b: str, timeout: float, index: int) -> None:
@@ -344,6 +363,11 @@ def build_thread_tweet_header(index: int, total: int) -> str:
     return f"# Tweet {index}/{total}"
 
 
+def build_thread_extra_images_message(count: int) -> str:
+    """Légende du message final regroupant les photos alternatives (T16bis)."""
+    return f"# {count} autre(s) photo(s) au choix, si une image d'un tweet ne convient pas"
+
+
 def notify_thread(
     thread: ThreadRecord,
     topic: ThreadTopicRecord,
@@ -351,6 +375,7 @@ def notify_thread(
     url: str,
     timeout: float,
     image_paths: list[Path] | None = None,
+    extra_image_paths: list[Path] | None = None,
 ) -> None:
     """Diffuse le thread généré (T15) — deux messages par tweet (en-tête, puis le tweet seul),
     jamais fusionnés. Correction (bug initial T15) : un en-tête + bloc de code ``` dans le MÊME
@@ -362,7 +387,11 @@ def notify_thread(
     `image_paths` (T16, optionnel) : une image par tweet, jointe au message du tweet lui-même
     (pas à l'en-tête) — le texte reste exactement copiable, la pièce jointe ne s'ajoute pas au
     contenu textuel. Liste plus courte que le nombre de tweets, ou absente : dégradation
-    gracieuse, les tweets restants partent simplement sans image."""
+    gracieuse, les tweets restants partent simplement sans image.
+
+    `extra_image_paths` (T16bis, optionnel) : photos alternatives envoyées dans un dernier
+    message, pour permettre de substituer une image sur un tweet précis avant publication
+    manuelle sur X — absentes ou vides : ce message n'est simplement pas envoyé."""
     total = len(thread.tweets)
     send_message(url, build_thread_intro_message(topic, thread.angle, total), timeout=timeout)
     for index, tweet in enumerate(thread.tweets, start=1):
@@ -374,3 +403,11 @@ def notify_thread(
             send_message_with_image(url, tweet, image_path, timeout=timeout)
         else:
             send_message(url, tweet, timeout=timeout)
+
+    if extra_image_paths:
+        send_message_with_images(
+            url,
+            build_thread_extra_images_message(len(extra_image_paths)),
+            extra_image_paths,
+            timeout=timeout,
+        )

@@ -529,6 +529,53 @@ def test_run_thread_resolve_joint_une_image_par_tweet(settings, monkeypatch, tmp
 
 
 @respx.mock
+def test_run_thread_resolve_envoie_des_photos_alternatives_en_fin_de_thread(
+    settings, monkeypatch, tmp_path
+):
+    """T16bis : en plus de l'image par tweet, un dernier message propose des photos alternatives
+    (celles déjà attribuées aux tweets doivent être exclues, voir
+    media_library.select_extra_images)."""
+    media_path = tmp_path / "media_library"
+    group_folder = media_path / "Groupe 1"
+    group_folder.mkdir(parents=True)
+    for i in range(8):
+        (group_folder / f"{i}.jpg").write_bytes(b"fake-bytes")
+
+    ids = _seed_topics(settings, n=3)
+    settings = _configured_settings(settings).model_copy(update={"media_library_path": media_path})
+    _seed_pending_selection(settings, ids)
+
+    _mock_bot_identity()
+    _mock_reaction("🇦", [{"id": "bot-42"}])
+    _mock_reaction("🇧", [{"id": "bot-42"}, {"id": "human-7"}])  # option B -> topic "Groupe 1"
+
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}." for i in range(5)])
+    monkeypatch.setattr(
+        analyzer.GeminiAnalyzer,
+        "write_thread",
+        lambda self, topic, angle, *, recent_hook_labels: (writing, "chiffre_marquant", 10, 5),
+    )
+    mock = respx.post(settings.discord_webhook_thread).mock(return_value=httpx.Response(204))
+
+    stats = run_thread_resolve(settings)
+    assert stats.sent == 1
+
+    # intro, (en-tête + tweet) x5 avec image jointe, puis le message final des photos alternatives
+    tweet_calls = [mock.calls[2 + 2 * i] for i in range(5)]  # les 5 messages "tweet + image jointe"
+    assert mock.call_count == 1 + 2 * 5 + 1
+    last_call = mock.calls[-1]
+    assert last_call.request.headers["content-type"].startswith("multipart/form-data")
+    used_contents = {call.request.content for call in tweet_calls}
+    assert last_call.request.content not in used_contents
+    # 5 photos alternatives (_EXTRA_IMAGE_COUNT), aucune ne doit être l'une des 5 déjà utilisées
+    for i in range(8):
+        used_this_one = any(f'"{i}.jpg"'.encode() in call.request.content for call in tweet_calls)
+        appears_in_final = f'"{i}.jpg"'.encode() in last_call.request.content
+        if used_this_one:
+            assert not appears_in_final
+
+
+@respx.mock
 def test_run_thread_resolve_reprise_apres_crash_sans_rappeler_gemini(settings, monkeypatch):
     """Le thread a déjà été inséré (crash simulé entre insert_thread et resolve_selection) :
     la reprise doit finaliser la sélection sans regénérer via Gemini."""

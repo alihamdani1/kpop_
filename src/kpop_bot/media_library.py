@@ -73,3 +73,22 @@ def select_images_for_thread(
     shuffled = pool.copy()
     random.shuffle(shuffled)
     return [shuffled[i % len(shuffled)] for i in range(count)]
+
+
+def select_extra_images(
+    media_library_path: Path,
+    *,
+    group_name: str,
+    concept_id: str | None,
+    exclude: list[Path],
+    count: int,
+) -> list[Path]:
+    """Images alternatives en plus de celles déjà attribuées aux tweets — pour offrir un choix
+    de substitution avant publication manuelle sur X, si l'image auto-choisie sur un tweet
+    précis ne convient pas. Exclut les images déjà utilisées ; retourne moins de `count` si le
+    pool restant est plus petit (jamais d'échec faute de stock)."""
+    pool = _resolve_pool(media_library_path, group_name=group_name, concept_id=concept_id)
+    remaining = [image for image in pool if image not in exclude]
+    if not remaining or count <= 0:
+        return []
+    return random.sample(remaining, k=min(count, len(remaining)))

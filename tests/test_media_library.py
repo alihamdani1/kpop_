@@ -99,3 +99,44 @@ def test_select_images_count_zero_retourne_liste_vide(tmp_path):
         media_library.select_images_for_thread(tmp_path, group_name="BTS", concept_id=None, count=0)
         == []
     )
+
+
+# --- select_extra_images (T16bis) : photos alternatives en plus de celles déjà attribuées. ---
+
+
+def test_select_extra_images_exclut_celles_deja_utilisees(tmp_path):
+    used = _make_image(tmp_path / "BTS", "01.jpg")
+    other = _make_image(tmp_path / "BTS", "02.jpg")
+
+    extra = media_library.select_extra_images(
+        tmp_path, group_name="BTS", concept_id=None, exclude=[used], count=5
+    )
+    assert extra == [other]
+
+
+def test_select_extra_images_respecte_le_plafond_count(tmp_path):
+    for i in range(10):
+        _make_image(tmp_path / "BTS", f"{i}.jpg")
+
+    extra = media_library.select_extra_images(
+        tmp_path, group_name="BTS", concept_id=None, exclude=[], count=5
+    )
+    assert len(extra) == 5
+    assert len(set(extra)) == 5
+
+
+def test_select_extra_images_liste_vide_si_tout_est_deja_utilise(tmp_path):
+    img1 = _make_image(tmp_path / "BTS", "01.jpg")
+    img2 = _make_image(tmp_path / "BTS", "02.jpg")
+
+    extra = media_library.select_extra_images(
+        tmp_path, group_name="BTS", concept_id=None, exclude=[img1, img2], count=5
+    )
+    assert extra == []
+
+
+def test_select_extra_images_liste_vide_si_rien_de_disponible(tmp_path):
+    extra = media_library.select_extra_images(
+        tmp_path, group_name="Groupe Sans Photos", concept_id=None, exclude=[], count=5
+    )
+    assert extra == []

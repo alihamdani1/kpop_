@@ -38,6 +38,7 @@ from kpop_bot.notifier import (
     send_embed,
     send_message,
     send_message_with_image,
+    send_message_with_images,
 )
 
 _WEBHOOK_URL = "https://discord.com/api/webhooks/fake/route-a"
@@ -396,3 +397,55 @@ def test_notify_thread_moins_d_images_que_de_tweets_degrade_gracieusement(tmp_pa
 
     assert mock.calls[2].request.headers["content-type"].startswith("multipart/form-data")
     assert mock.calls[4].request.headers["content-type"] == "application/json"
+
+
+# --- Photos alternatives en fin de thread (T16bis). ---
+
+
+@respx.mock
+def test_send_message_with_images_envoie_plusieurs_pieces_jointes(tmp_path):
+    img1 = tmp_path / "1.jpg"
+    img1.write_bytes(b"bytes-1")
+    img2 = tmp_path / "2.jpg"
+    img2.write_bytes(b"bytes-2")
+    url = "https://discord.com/api/webhooks/fake/thread"
+    route = respx.post(url).mock(return_value=httpx.Response(204))
+
+    send_message_with_images(url, "Légende.", [img1, img2], timeout=5.0)
+
+    assert route.called
+    body = route.calls[0].request.content
+    assert b"Legende." in body or b"L\xc3\xa9gende." in body
+    assert b"1.jpg" in body
+    assert b"2.jpg" in body
+    assert b"bytes-1" in body
+    assert b"bytes-2" in body
+
+
+@respx.mock
+def test_notify_thread_envoie_un_dernier_message_avec_les_photos_alternatives(tmp_path):
+    url = "https://discord.com/api/webhooks/fake/thread"
+    mock = respx.post(url).mock(return_value=httpx.Response(204))
+    extra1 = tmp_path / "extra1.jpg"
+    extra1.write_bytes(b"e1")
+    extra2 = tmp_path / "extra2.jpg"
+    extra2.write_bytes(b"e2")
+
+    thread = _thread(tweets=["Un."])
+    notify_thread(thread, _topic(), url=url, timeout=5.0, extra_image_paths=[extra1, extra2])
+
+    assert mock.call_count == 4  # intro + en-tête + tweet + message final des photos alternatives
+    last_call = mock.calls[3]
+    assert last_call.request.headers["content-type"].startswith("multipart/form-data")
+    assert b"extra1.jpg" in last_call.request.content
+    assert b"extra2.jpg" in last_call.request.content
+
+
+@respx.mock
+def test_notify_thread_sans_photos_alternatives_n_envoie_pas_de_message_final():
+    url = "https://discord.com/api/webhooks/fake/thread"
+    mock = respx.post(url).mock(return_value=httpx.Response(204))
+    thread = _thread(tweets=["Un."])
+    notify_thread(thread, _topic(), url=url, timeout=5.0, extra_image_paths=[])
+
+    assert mock.call_count == 3  # intro + en-tête + tweet, rien de plus

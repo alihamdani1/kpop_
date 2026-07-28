@@ -921,6 +921,44 @@ totalement inconnu) : les 4 cas se résolvent comme prévu.
 
 ---
 
+### ✅ T16bis — Photos alternatives en fin de thread — FAIT
+
+**Origine** : demande d'offrir un choix de substitution — si l'image auto-choisie sur un tweet
+précis ne convient pas au moment de la publication manuelle sur X, la rédaction doit pouvoir
+piocher une alternative sans devoir aller fouiller la bibliothèque à la main.
+
+**Décision** : après l'envoi de tous les tweets (texte + image par tweet, inchangé de T16), un
+dernier message Discord regroupe 5 photos alternatives supplémentaires, tirées du même pool que
+celui résolu pour le thread (groupe → sous-catégorie `_generic` → racine `_generic`), en
+excluant les images déjà attribuées aux tweets. Nombre fixé en dur (`_EXTRA_IMAGE_COUNT = 5`
+dans `thread_pipeline.py`) plutôt qu'un nouveau réglage `Settings` — pas de raison de le rendre
+configurable à ce stade. Dégradation gracieuse : si le pool restant est plus petit que 5 (ou
+vide), on envoie ce qu'il reste, jamais d'échec faute de stock ; si vide, aucun message
+supplémentaire n'est envoyé.
+
+**Décisions techniques** :
+- `media_library.select_extra_images()` : même résolution de pool que
+  `select_images_for_thread`, exclut les images déjà utilisées, retourne jusqu'à `count` images.
+- `notifier._post_webhook_with_files()` généralise l'upload mono-image (T16) en upload
+  multi-fichiers (convention Discord `files[0]`, `files[1]`, ...) — `send_message_with_image`
+  garde son comportement (délègue avec une liste à 1 élément), nouvelle
+  `send_message_with_images()` pour le cas multi-images.
+- `notify_thread()` reçoit un paramètre optionnel `extra_image_paths` : si non vide, un dernier
+  message avec légende + toutes les images jointes est envoyé après la boucle des tweets.
+
+**Fichiers concernés** : `media_library.py` (`select_extra_images`), `notifier.py`
+(`_post_webhook_with_files`, `send_message_with_images`, `build_thread_extra_images_message`,
+`notify_thread`), `thread_pipeline.py` (`_EXTRA_IMAGE_COUNT`, branchement dans
+`run_thread_resolve`), tests associés.
+
+**Fait quand** : tests sur `select_extra_images` (exclusion, plafond, pool épuisé, pool vide),
+sur l'envoi Discord multi-images, sur le message final de `notify_thread` (présent si
+`extra_image_paths` non vide, absent sinon — non-régression), et sur le branchement complet dans
+`run_thread_resolve` (photos alternatives bien exclusives des images déjà utilisées sur les
+tweets) — 209 tests au vert, `ruff` propre.
+
+---
+
 ## Ordre d'exécution — où on en est
 
 ```
