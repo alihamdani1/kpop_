@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from kpop_bot import analyzer, discord_reactions, notifier, storage
+from kpop_bot import analyzer, discord_reactions, media_library, notifier, storage
 from kpop_bot.models import ThreadAngle, ThreadConcept, ThreadTopicIdea
 from kpop_bot.settings import Settings
 
@@ -384,12 +384,19 @@ def run_thread_resolve(settings: Settings) -> ThreadResolveStats:
         if settings.discord_webhook_thread:
             for thread in storage.pending_threads(conn):
                 topic = storage.get_topic(conn, thread.topic_id)
+                image_paths = media_library.select_images_for_thread(
+                    settings.media_library_path,
+                    group_name=topic.group_name,
+                    concept_id=topic.concept_id,
+                    count=len(thread.tweets),
+                )
                 try:
                     notifier.notify_thread(
                         thread,
                         topic,
                         url=settings.discord_webhook_thread,
                         timeout=settings.request_timeout_seconds,
+                        image_paths=image_paths,
                     )
                     storage.mark_thread_sent(conn, thread.id)
                     stats.sent += 1

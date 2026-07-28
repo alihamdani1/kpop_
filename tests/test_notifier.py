@@ -37,6 +37,7 @@ from kpop_bot.notifier import (
     notify_tiktok,
     send_embed,
     send_message,
+    send_message_with_image,
 )
 
 _WEBHOOK_URL = "https://discord.com/api/webhooks/fake/route-a"
@@ -326,3 +327,72 @@ def test_notify_thread_isole_chaque_tweet_dans_son_propre_message():
     assert bodies[4]["content"] == "Deux."
     assert bodies[5]["content"] == "# Tweet 3/3"
     assert bodies[6]["content"] == "Trois."
+
+
+# --- Images d'illustration (T16) : une image par tweet, jointe au message du tweet lui-même. ---
+
+
+@respx.mock
+def test_send_message_with_image_envoie_en_multipart(tmp_path):
+    image_path = tmp_path / "photo.jpg"
+    image_path.write_bytes(b"fake-bytes")
+    url = "https://discord.com/api/webhooks/fake/thread"
+    route = respx.post(url).mock(return_value=httpx.Response(204))
+
+    send_message_with_image(url, "Contenu du tweet.", image_path, timeout=5.0)
+
+    assert route.called
+    request = route.calls[0].request
+    assert request.headers["content-type"].startswith("multipart/form-data")
+    assert b"Contenu du tweet." in request.content
+    assert b"photo.jpg" in request.content
+    assert b"fake-bytes" in request.content
+
+
+@respx.mock
+def test_notify_thread_joint_une_image_par_tweet_quand_disponible(tmp_path):
+    url = "https://discord.com/api/webhooks/fake/thread"
+    mock = respx.post(url).mock(return_value=httpx.Response(204))
+    image1 = tmp_path / "1.jpg"
+    image1.write_bytes(b"img1")
+    image2 = tmp_path / "2.jpg"
+    image2.write_bytes(b"img2")
+
+    thread = _thread(tweets=["Un.", "Deux."])
+    notify_thread(thread, _topic(), url=url, timeout=5.0, image_paths=[image1, image2])
+
+    assert mock.call_count == 5  # intro + (en-tête + tweet) * 2
+    assert mock.calls[2].request.headers["content-type"].startswith("multipart/form-data")
+    assert b"Un." in mock.calls[2].request.content
+    assert b"1.jpg" in mock.calls[2].request.content
+    assert mock.calls[4].request.headers["content-type"].startswith("multipart/form-data")
+    assert b"Deux." in mock.calls[4].request.content
+    assert b"2.jpg" in mock.calls[4].request.content
+
+
+@respx.mock
+def test_notify_thread_sans_images_reste_inchange():
+    """Non-régression : sans image_paths (comportement d'avant T16), aucun message en
+    multipart — uniquement du JSON pur, comme avant."""
+    url = "https://discord.com/api/webhooks/fake/thread"
+    mock = respx.post(url).mock(return_value=httpx.Response(204))
+    thread = _thread(tweets=["Un.", "Deux."])
+    notify_thread(thread, _topic(), url=url, timeout=5.0)
+
+    assert mock.call_count == 5
+    for call in mock.calls:
+        assert call.request.headers["content-type"] == "application/json"
+
+
+@respx.mock
+def test_notify_thread_moins_d_images_que_de_tweets_degrade_gracieusement(tmp_path):
+    url = "https://discord.com/api/webhooks/fake/thread"
+    mock = respx.post(url).mock(return_value=httpx.Response(204))
+    image1 = tmp_path / "1.jpg"
+    image1.write_bytes(b"img1")
+
+    thread = _thread(tweets=["Un.", "Deux."])
+    notify_thread(thread, _topic(), url=url, timeout=5.0, image_paths=[image1])
+
+    assert mock.calls[2].request.headers["content-type"].startswith("multipart/form-data")
+    assert mock.calls[4].request.headers["content-type"] == "application/json"

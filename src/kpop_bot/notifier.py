@@ -14,8 +14,11 @@ plus rien sur quoi la sélection puisse mordre.
 
 from __future__ import annotations
 
+import json
 import logging
+import mimetypes
 import time
+from pathlib import Path
 
 import httpx
 
@@ -133,6 +136,48 @@ def send_embed(webhook_url: str, embed: dict, *, timeout: float) -> None:
 
 def send_message(webhook_url: str, content: str, *, timeout: float) -> None:
     _post_webhook(webhook_url, {"content": content}, timeout=timeout)
+
+
+def _post_webhook_with_file(
+    webhook_url: str, content: str, image_path: Path, *, timeout: float
+) -> None:
+    """Poste un message texte + une image jointe dans la même requête (multipart, T16) — même
+    gestion du rate-limit que `_post_webhook`. L'image ne remplace jamais `_post_webhook` pour
+    les messages sans pièce jointe : Discord exige un encodage différent (`data`/`files`) dès
+    qu'un fichier est joint, d'où une fonction dédiée plutôt qu'un paramètre optionnel sur
+    `_post_webhook`."""
+    mime_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
+    payload_json = json.dumps({"content": content}, ensure_ascii=False)
+    for attempt in range(1, _MAX_RETRIES + 1):
+        with image_path.open("rb") as image_file:
+            response = httpx.post(
+                webhook_url,
+                data={"payload_json": payload_json},
+                files={"file": (image_path.name, image_file, mime_type)},
+                timeout=timeout,
+            )
+        if response.status_code in (200, 204):
+            return
+        if response.status_code == 429:
+            retry_after = float(response.json().get("retry_after", 1.0))
+            logger.warning(
+                "Rate-limit Discord (tentative %d/%d) — pause %.1fs.",
+                attempt,
+                _MAX_RETRIES,
+                retry_after,
+            )
+            time.sleep(retry_after)
+            continue
+        raise NotificationError(
+            f"Webhook Discord en échec ({response.status_code}) : {response.text[:300]}"
+        )
+    raise NotificationError("Webhook Discord toujours rate-limité après plusieurs tentatives.")
+
+
+def send_message_with_image(
+    webhook_url: str, content: str, image_path: Path, *, timeout: float
+) -> None:
+    _post_webhook_with_file(webhook_url, content, image_path, timeout=timeout)
 
 
 def notify(record: ArticleRecord, *, url_a: str, url_b: str, timeout: float, index: int) -> None:
@@ -300,16 +345,32 @@ def build_thread_tweet_header(index: int, total: int) -> str:
 
 
 def notify_thread(
-    thread: ThreadRecord, topic: ThreadTopicRecord, *, url: str, timeout: float
+    thread: ThreadRecord,
+    topic: ThreadTopicRecord,
+    *,
+    url: str,
+    timeout: float,
+    image_paths: list[Path] | None = None,
 ) -> None:
     """Diffuse le thread généré (T15) — deux messages par tweet (en-tête, puis le tweet seul),
     jamais fusionnés. Correction (bug initial T15) : un en-tête + bloc de code ``` dans le MÊME
     message que le tweet cassait le copier-coller mobile — le bouton natif « Copier le texte »
     de Discord copie tout le contenu brut du message, en-tête et balises de code compris. En
     isolant le tweet seul dans son propre message, sans rien autour, la copie mobile récupère
-    exactement le texte du tweet — même principe déjà validé pour `tweet_draft` en T6."""
+    exactement le texte du tweet — même principe déjà validé pour `tweet_draft` en T6.
+
+    `image_paths` (T16, optionnel) : une image par tweet, jointe au message du tweet lui-même
+    (pas à l'en-tête) — le texte reste exactement copiable, la pièce jointe ne s'ajoute pas au
+    contenu textuel. Liste plus courte que le nombre de tweets, ou absente : dégradation
+    gracieuse, les tweets restants partent simplement sans image."""
     total = len(thread.tweets)
     send_message(url, build_thread_intro_message(topic, thread.angle, total), timeout=timeout)
     for index, tweet in enumerate(thread.tweets, start=1):
         send_message(url, build_thread_tweet_header(index, total), timeout=timeout)
-        send_message(url, tweet, timeout=timeout)
+        image_path = (
+            image_paths[index - 1] if image_paths and index - 1 < len(image_paths) else None
+        )
+        if image_path is not None:
+            send_message_with_image(url, tweet, image_path, timeout=timeout)
+        else:
+            send_message(url, tweet, timeout=timeout)

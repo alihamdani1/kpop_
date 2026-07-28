@@ -871,6 +871,49 @@ le lot de 12 couvre maintenant 8 concepts distincts sur 5 thèmes différents (c
 3), dominé par les piliers à poids fort comme prévu — contre 12/12 sur un seul concept avant ce
 correctif.
 
+### ✅ T16 — Bibliothèque interne d'images (une image par tweet) — FAIT
+
+**Origine** : demande d'accompagner chaque tweet d'un thread d'une image. Options évaluées
+(recherche d'image web, génération IA, API photo sous licence type Getty) — toutes écartées :
+la recherche web expose à un vrai risque de contrefaçon pour un média, la génération IA de
+vrais artistes identifiables est peu fiable et éthiquement discutable, une API sous licence
+ajoute une dépendance payante pour un gain marginal à ce stade. **Décision : bibliothèque
+interne curée**, cohérente avec le principe déjà appliqué partout ailleurs (`artist_tiers.yaml`,
+`thread_concepts.yaml`) — la rédaction possède les droits, le code ne fait que piocher dedans.
+
+**Structure retenue** (`config/media_library/`, déjà en place et peuplée par l'utilisateur) :
+- 1 dossier par groupe (nommé exactement comme `group_name` dans `artist_tiers.yaml`).
+- `_generic/` pour les sujets transverses (`group_name` = portée générale, ex. "industrie
+  K-pop") — jamais utilisé si un dossier de groupe existe. 4 sous-catégories rattachées à des
+  concepts précis (`industrie/`, `charts_records/`, `france/`, `fandom/`) + une racine à plat en
+  dernier repli.
+- **Pourquoi les sous-catégories plutôt qu'un `_generic` uniforme** : `_generic` ne sert que
+  pour les sujets transverses, jamais pour un groupe réel — dans ce cas précis (volume limité),
+  une photo dans la bonne sous-catégorie est presque toujours plus pertinente qu'une photo
+  générique tirée au hasard, pour un coût de code minime (une petite table concept → sous-dossier).
+
+**Décisions techniques** :
+- Résolution du dossier, dans l'ordre : dossier du groupe → sous-catégorie `_generic` (via
+  `concept_id`) → racine `_generic` à plat → aucune image (dégradation gracieuse, jamais un
+  thread bloqué faute de photo).
+- Sélection aléatoire simple dans le dossier résolu (pas de garantie déterministe façon
+  T15bis/quater — l'enjeu ici est la variété visuelle, pas l'anti-répétition stricte d'un
+  sujet). Si le dossier a moins de photos que de tweets, répétition plutôt qu'échec.
+- Image jointe **dans le même message Discord** que le texte du tweet (upload multipart), pas
+  un message séparé — pour ne pas ajouter un message de plus par tweet, et garder le tweet
+  copiable tel quel (l'image en pièce jointe n'affecte pas le texte copié).
+
+**Fichiers concernés** : nouveau `src/kpop_bot/media_library.py` (résolution + sélection),
+`settings.py` (`media_library_path`), `notifier.py` (upload multipart, un message
+texte+image par tweet), `thread_pipeline.py` (branchement dans `run_thread_resolve`), tests
+associés.
+
+**Fait quand** : tests sur la résolution de dossier (groupe → sous-catégorie → racine → aucune
+image), sur la sélection (bon nombre d'images, répétition si le pool est trop petit), sur
+l'envoi Discord avec pièce jointe — 199 tests au vert, `ruff` propre. Vérifié avec la vraie
+bibliothèque du projet (groupe réel, sous-catégorie `_generic` mappée, repli racine, groupe
+totalement inconnu) : les 4 cas se résolvent comme prévu.
+
 ---
 
 ## Ordre d'exécution — où on en est

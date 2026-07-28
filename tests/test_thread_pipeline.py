@@ -473,6 +473,39 @@ def test_run_thread_resolve_genere_et_envoie_le_thread_choisi(settings, monkeypa
 
 
 @respx.mock
+def test_run_thread_resolve_joint_une_image_par_tweet(settings, monkeypatch, tmp_path):
+    """T16 : l'image jointe à chaque tweet vient de la bibliothèque, résolue à partir du groupe
+    du topic choisi (voir media_library.select_images_for_thread)."""
+    media_path = tmp_path / "media_library"
+    image_path = media_path / "Groupe 1" / "photo.jpg"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"fake-bytes")
+
+    ids = _seed_topics(settings, n=3)
+    settings = _configured_settings(settings).model_copy(update={"media_library_path": media_path})
+    _seed_pending_selection(settings, ids)
+
+    _mock_bot_identity()
+    _mock_reaction("🇦", [{"id": "bot-42"}])
+    _mock_reaction("🇧", [{"id": "bot-42"}, {"id": "human-7"}])  # option B -> topic "Groupe 1"
+
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}." for i in range(5)])
+    monkeypatch.setattr(
+        analyzer.GeminiAnalyzer,
+        "write_thread",
+        lambda self, topic, angle, *, recent_hook_labels: (writing, "chiffre_marquant", 10, 5),
+    )
+    mock = respx.post(settings.discord_webhook_thread).mock(return_value=httpx.Response(204))
+
+    stats = run_thread_resolve(settings)
+    assert stats.sent == 1
+
+    tweet_call = mock.calls[2]  # intro, en-tête "Tweet 1/5", puis le 1er tweet avec image jointe
+    assert tweet_call.request.headers["content-type"].startswith("multipart/form-data")
+    assert b"photo.jpg" in tweet_call.request.content
+
+
+@respx.mock
 def test_run_thread_resolve_reprise_apres_crash_sans_rappeler_gemini(settings, monkeypatch):
     """Le thread a déjà été inséré (crash simulé entre insert_thread et resolve_selection) :
     la reprise doit finaliser la sélection sans regénérer via Gemini."""

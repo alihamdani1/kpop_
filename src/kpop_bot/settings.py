@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     thread_gemini_second_fallback_model: str = "gemini-3.1-flash-lite"
     # Délai avant qu'une sélection PENDING (personne n'a réagi) soit marquée EXPIRED.
     thread_selection_ttl_hours: float = 24.0
+    # Bibliothèque interne d'images (T16) — 1 dossier par groupe + _generic pour les sujets
+    # transverses, voir config/media_library/README.md.
+    media_library_path: Path = Path("config/media_library")
 
 
 _settings: Settings | None = None
