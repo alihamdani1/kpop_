@@ -106,7 +106,7 @@ def test_available_angles_toutes_disponibles_au_depart(conn):
 
 def test_available_angles_diminue_apres_insert_thread(conn):
     [topic_id] = storage.insert_topic_ideas(conn, [_idea()])
-    writing = ThreadWritingResult(tweets=[f"Tweet {i}" for i in range(6)])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}" for i in range(6)])
     storage.insert_thread(
         conn,
         selection_id=None,
@@ -125,7 +125,7 @@ def test_available_angles_diminue_apres_insert_thread(conn):
 
 def test_backlog_topic_count_exclut_un_topic_dont_tous_les_angles_sont_consommes(conn):
     [topic_id] = storage.insert_topic_ideas(conn, [_idea()])
-    writing = ThreadWritingResult(tweets=[f"Tweet {i}" for i in range(6)])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}" for i in range(6)])
     for angle in ThreadAngle:
         storage.insert_thread(
             conn,
@@ -143,7 +143,7 @@ def test_backlog_topic_count_exclut_un_topic_dont_tous_les_angles_sont_consommes
 
 def test_threads_unique_topic_angle_leve_integrity_error(conn):
     [topic_id] = storage.insert_topic_ideas(conn, [_idea()])
-    writing = ThreadWritingResult(tweets=[f"Tweet {i}" for i in range(6)])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}" for i in range(6)])
     storage.insert_thread(
         conn,
         selection_id=None,
@@ -173,7 +173,7 @@ def test_recent_group_theme_pairs_respecte_la_fenetre(conn):
     [topic_id] = storage.insert_topic_ideas(
         conn, [_idea(group_name="Groupe X", theme=ThreadTheme.RECAP_SCANDALE)]
     )
-    writing = ThreadWritingResult(tweets=[f"Tweet {i}" for i in range(6)])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}" for i in range(6)])
     thread_id = storage.insert_thread(
         conn,
         selection_id=None,
@@ -196,7 +196,7 @@ def test_recent_group_theme_pairs_respecte_la_fenetre(conn):
 
 def test_recent_hook_labels_ordre_et_limite(conn):
     [topic_id] = storage.insert_topic_ideas(conn, [_idea()])
-    writing = ThreadWritingResult(tweets=[f"Tweet {i}" for i in range(6)])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}" for i in range(6)])
     for index, (angle, label) in enumerate(
         zip(
             list(ThreadAngle),
@@ -246,7 +246,7 @@ def test_select_picker_candidates_exclut_les_couples_recents(conn):
     [topic_id] = storage.insert_topic_ideas(
         conn, [_idea(group_name="Groupe A", theme=ThreadTheme.ANALYSE_COMEBACK)]
     )
-    writing = ThreadWritingResult(tweets=[f"Tweet {i}" for i in range(6)])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}" for i in range(6)])
     storage.insert_thread(
         conn,
         selection_id=None,
@@ -317,7 +317,7 @@ def test_expire_stale_selections(conn):
 
 def test_thread_sent_et_pending_threads(conn):
     [topic_id] = storage.insert_topic_ideas(conn, [_idea()])
-    writing = ThreadWritingResult(tweets=[f"Tweet {i}" for i in range(6)])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}" for i in range(6)])
     thread_id = storage.insert_thread(
         conn,
         selection_id=None,
@@ -339,7 +339,7 @@ def test_thread_sent_et_pending_threads(conn):
 
 def test_mark_thread_failed(conn):
     [topic_id] = storage.insert_topic_ideas(conn, [_idea()])
-    writing = ThreadWritingResult(tweets=[f"Tweet {i}" for i in range(6)])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}" for i in range(6)])
     thread_id = storage.insert_thread(
         conn,
         selection_id=None,

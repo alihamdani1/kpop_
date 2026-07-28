@@ -319,6 +319,15 @@ class ThreadWritingResult(BaseModel):
     la réaction humaine de sélection — jamais générée avant qu'un humain ait choisi parmi les
     3 options proposées."""
 
+    premise_respectee: bool = Field(
+        description="Vérification honnête, à faire AVANT de rédiger les tweets : le thread "
+        "va-t-il réellement tenir la promesse du `premise` fourni — pas seulement celle du "
+        "tweet 1 ? Champ placé avant `tweets` (T15ter) pour forcer cette vérification avant la "
+        "rédaction plutôt qu'une justification a posteriori. Seule vérification demandée à "
+        "l'IA qui n'est pas mécaniquement vérifiable par du code (sémantique) — la longueur des "
+        "tweets et l'absence de hashtag dans le corps sont, elles, imposées par des validators "
+        "stricts ci-dessous, jamais par une simple auto-déclaration."
+    )
     tweets: list[str] = Field(
         description="Le thread complet, dans l'ordre de publication. Chaque tweet ≤260 "
         "caractères (la numérotation 'n/total' est ajoutée en code, jamais par l'IA — même "
@@ -329,6 +338,11 @@ class ThreadWritingResult(BaseModel):
     def _enforce_thread_shape(self) -> ThreadWritingResult:
         """Un thread trop court manque d'impact, un thread trop long fait décrocher — 5 à 8
         tweets est la fourchette cible (voir TODO.md T15, stratégie de contenu viral)."""
+        if not self.premise_respectee:
+            raise ValueError(
+                "L'IA indique elle-même que le thread ne respecte pas le premise fourni — "
+                "rejeté plutôt que diffusé (voir TODO.md T15ter), repris au cycle suivant."
+            )
         if not 5 <= len(self.tweets) <= 8:
             raise ValueError(f"Un thread doit contenir 5 à 8 tweets, reçu {len(self.tweets)}.")
         for index, tweet in enumerate(self.tweets, start=1):
@@ -336,6 +350,12 @@ class ThreadWritingResult(BaseModel):
                 raise ValueError(
                     f"Tweet {index}/{len(self.tweets)} dépasse 260 caractères ({len(tweet)})."
                 )
+        body_tweets = self.tweets[:-1]
+        if any("#" in tweet for tweet in body_tweets):
+            raise ValueError(
+                "Un hashtag a été détecté dans un tweet du corps (avant le dernier) — interdit, "
+                "voir TODO.md T15ter (validator strict, pas une auto-déclaration du modèle)."
+            )
         return self
 
 

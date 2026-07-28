@@ -96,6 +96,14 @@ class Settings(BaseSettings):
     # Concepts viraux curés (T15bis, idéation hybride) — croisés en code avec les groupes de
     # artist_tiers_path pour former les Topics candidats, voir thread_pipeline._candidate_pairs.
     thread_concepts_path: Path = Path("config/thread_concepts.yaml")
+    # Modèle dédié à l'idéation/rédaction des threads (T15ter) — chaîne distincte de
+    # gemini_model/*_fallback_model (réservée au pipeline articles à fort volume, ~225
+    # appels/jour). Les threads ne coûtent que 1-2 appels/jour : largement la marge pour un
+    # modèle de meilleure qualité rédactionnelle (flash plutôt que flash-lite) sans impact sur
+    # le quota qui compte vraiment.
+    thread_gemini_model: str = "gemini-3.5-flash"
+    thread_gemini_fallback_model: str = "gemini-3.1-flash"
+    thread_gemini_second_fallback_model: str = "gemini-2.5-flash"
     # Délai avant qu'une sélection PENDING (personne n'a réagi) soit marquée EXPIRED.
     thread_selection_ttl_hours: float = 24.0
 

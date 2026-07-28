@@ -625,8 +625,11 @@ def _topic(**overrides) -> ThreadTopicRecord:
     return ThreadTopicRecord(**defaults)
 
 
-def _thread_payload(n: int = 6) -> dict:
-    return {"tweets": [f"Tweet numéro {i}." for i in range(n)]}
+def _thread_payload(n: int = 6, *, premise_respectee: bool = True) -> dict:
+    return {
+        "premise_respectee": premise_respectee,
+        "tweets": [f"Tweet numéro {i}." for i in range(n)],
+    }
 
 
 def test_write_thread_injecte_le_topic_et_l_angle(gemini, monkeypatch):
@@ -648,6 +651,24 @@ def test_write_thread_injecte_le_topic_et_l_angle(gemini, monkeypatch):
     assert "Groupe X" in captured_prompts[0]
     assert "CONTRARIEN" in captured_prompts[0]
     assert analyzer._THREAD_ANGLE_INSTRUCTIONS[ThreadAngle.CONTRARIEN] in captured_prompts[0]
+
+
+def test_write_thread_prompt_contient_les_nouvelles_consignes_de_style(gemini, monkeypatch):
+    """T15ter : vérifie que les nouvelles consignes (anti-langage IA, hook+frame, boucles
+    ouvertes, auto-vérification du premise) sont bien injectées dans le prompt système."""
+    captured_prompts: list[str] = []
+
+    def _fake_generate(*, model, contents, config):
+        captured_prompts.append(config.system_instruction)
+        return _FakeResponse(_thread_payload())
+
+    monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
+    gemini.write_thread(_topic(), ThreadAngle.STORYTELLING, recent_hook_labels=[])
+    prompt = captured_prompts[0]
+    assert "langage IA" in prompt
+    assert "en effet" in prompt
+    assert "premise_respectee" in prompt
+    assert "boucle ouverte" in prompt
 
 
 def test_pick_hook_label_exclut_les_labels_recents(gemini):

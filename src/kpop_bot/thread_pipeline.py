@@ -18,6 +18,10 @@ _OPTION_EMOJIS = ["🇦", "🇧", "🇨"]
 
 
 def _gemini(settings: Settings) -> analyzer.GeminiAnalyzer:
+    """Chaîne de modèles dédiée aux threads (T15ter) — distincte de gemini_model/*_fallback_model
+    (réservés au pipeline articles, ~225 appels/jour). Volume threads négligeable (1-2
+    appels/jour) : marge pour un modèle de meilleure qualité rédactionnelle sans impact sur le
+    quota qui compte vraiment."""
     keys = [settings.gemini_api_key]
     if settings.gemini_api_key_2:
         keys.append(settings.gemini_api_key_2)
@@ -25,9 +29,9 @@ def _gemini(settings: Settings) -> analyzer.GeminiAnalyzer:
     return analyzer.GeminiAnalyzer(
         api_keys=keys,
         models=[
-            settings.gemini_model,
-            settings.gemini_fallback_model,
-            settings.gemini_second_fallback_model,
+            settings.thread_gemini_model,
+            settings.thread_gemini_fallback_model,
+            settings.thread_gemini_second_fallback_model,
         ],
         artist_tiers=artist_tiers,
         min_seconds_between_calls=settings.gemini_min_seconds_between_calls,

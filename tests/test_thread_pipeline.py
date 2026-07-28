@@ -20,6 +20,7 @@ from kpop_bot.models import (
 from kpop_bot.settings import Settings
 from kpop_bot.thread_pipeline import (
     _candidate_pairs,
+    _gemini,
     _load_viral_groups,
     run_thread_replenish,
     run_thread_resolve,
@@ -48,6 +49,20 @@ def settings(tmp_path: Path) -> Settings:
         thread_selection_ttl_hours=24.0,
         db_path=tmp_path / "test.db",
     )
+
+
+def test_gemini_utilise_la_chaine_de_modeles_dediee_aux_threads(settings):
+    """T15ter : les threads doivent utiliser thread_gemini_model/*_fallback_model, jamais
+    gemini_model/*_fallback_model (réservés au pipeline articles à fort volume)."""
+    settings = settings.model_copy(
+        update={
+            "thread_gemini_model": "gemini-thread-1",
+            "thread_gemini_fallback_model": "gemini-thread-2",
+            "thread_gemini_second_fallback_model": "gemini-thread-3",
+        }
+    )
+    instance = _gemini(settings)
+    assert instance._models == ["gemini-thread-1", "gemini-thread-2", "gemini-thread-3"]
 
 
 def _idea(**overrides) -> ThreadTopicIdea:
@@ -404,7 +419,7 @@ def test_run_thread_resolve_genere_et_envoie_le_thread_choisi(settings, monkeypa
     _mock_reaction("🇦", [{"id": "bot-42"}])  # personne n'a choisi l'option A
     _mock_reaction("🇧", [{"id": "bot-42"}, {"id": "human-7"}])  # option B choisie
 
-    writing = ThreadWritingResult(tweets=[f"Tweet {i}." for i in range(5)])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}." for i in range(5)])
     monkeypatch.setattr(
         analyzer.GeminiAnalyzer,
         "write_thread",
@@ -431,7 +446,7 @@ def test_run_thread_resolve_reprise_apres_crash_sans_rappeler_gemini(settings, m
     _seed_pending_selection(settings, ids)
 
     conn = storage.init_db(settings.db_path)
-    writing = ThreadWritingResult(tweets=[f"Tweet {i}." for i in range(5)])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}." for i in range(5)])
     storage.insert_thread(
         conn,
         selection_id=None,
@@ -514,7 +529,7 @@ def test_run_thread_resolve_retente_l_envoi_d_un_thread_draft_sans_regenerer(set
     settings = _configured_settings(settings)
 
     conn = storage.init_db(settings.db_path)
-    writing = ThreadWritingResult(tweets=[f"Tweet {i}." for i in range(5)])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}." for i in range(5)])
     storage.insert_thread(
         conn,
         selection_id=None,
@@ -547,7 +562,7 @@ def test_run_thread_resolve_echec_envoi_garde_le_thread_en_draft(settings):
     settings = _configured_settings(settings)
 
     conn = storage.init_db(settings.db_path)
-    writing = ThreadWritingResult(tweets=[f"Tweet {i}." for i in range(5)])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}." for i in range(5)])
     storage.insert_thread(
         conn,
         selection_id=None,

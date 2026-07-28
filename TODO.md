@@ -721,6 +721,70 @@ migration de la colonne `concept_id`, non-régression sur les topics historiques
 vert, `ruff` propre. Vérifié avec la vraie config du projet (`thread-replenish --dry-run`) :
 candidats bien diversifiés sur plusieurs groupes par lot.
 
+### ✅ T15ter — Rédaction des threads : style, structure, auto-vérification — FAIT
+
+**Origine** : relecture du prompt `_THREAD_WRITING_SYSTEM_PROMPT` (T15) — encore trop générique
+sur la forme (aucun exemple, aucune consigne anti-« langage IA »), et un seul modèle *lite*
+partagé avec le pipeline articles alors que le volume threads est minime.
+
+**Décisions** :
+
+1. **Modèle dédié, plus capable** — nouveaux réglages `thread_gemini_model`
+   (`gemini-3.5-flash`), `thread_gemini_fallback_model` (`gemini-3.1-flash`),
+   `thread_gemini_second_fallback_model` (`gemini-2.5-flash`) dans `settings.py`, utilisés par
+   `thread_pipeline._gemini()` à la place de la chaîne `*-lite` du pipeline articles. Justifié
+   par le volume : 1-2 appels/jour côté threads contre ~225/jour côté articles — largement la
+   marge pour un modèle de meilleure qualité rédactionnelle sans toucher au quota qui compte
+   vraiment.
+2. **Style anti-« langage IA »** — liste de mots/tournures bannis dans le prompt (« en effet »,
+   « cependant », « il est important de noter », « plongeons dans », « crucial », « véritable »,
+   « incontournable », « d'ailleurs », « il convient de », « au cœur de », « décryptage ») +
+   consigne d'oralité maîtrisée (phrases courtes, ponctuation dynamique).
+3. **Rythme visuel** — consigne d'aération conditionnelle (sauts de ligne si le tweet porte
+   plusieurs idées, jamais imposée à un tweet déjà court) plutôt qu'une règle rigide qui
+   pénaliserait un tweet de clôture volontairement sec.
+4. **Tweet 1 : hook + frame explicites** — remplace l'actuel « pose une promesse claire » par une
+   consigne à deux parties obligatoires (accroche qui stoppe le scroll + promesse exacte de ce
+   que le thread va montrer), avec interdiction explicite de démarrer par le seul nom du groupe.
+5. **Open loops entre tweets** — consigne + exemples concrets (« Mais le plus surprenant est
+   arrivé après. », « Et c'est là que tout a basculé : ») remplaçant l'actuel exemple isolé
+   (« mais attends, ce n'est pas tout... »).
+6. **Exemple de ton (few-shot)** — ajouté au prompt, même principe que `_TIKTOK_SYSTEM_PROMPT`
+   (T14) : un exemple concret calibre mieux un modèle *lite*/*flash* qu'une instruction abstraite
+   seule. Sujet fictif, clairement signalé comme non réutilisable tel quel.
+7. **Auto-vérification — via le schéma, pas la prose seule** : leçon déjà tirée en T14 (un
+   schéma décrit en toutes lettres dans le prompt est ignoré tant que `response_schema` n'est
+   pas mis à jour en conséquence). Répartition en 2 mécanismes distincts selon ce qui est
+   vérifiable ou non par du code :
+   - **Nouveau champ `premise_respectee: bool`** sur `ThreadWritingResult`, placé **avant**
+     `tweets` (l'ordre des champs force le modèle à « raisonner » avant de rédiger). Seule
+     vérification proposée par l'utilisateur qui n'est pas mécaniquement vérifiable par du code
+     (sémantique) — un nouveau `model_validator` rejette la réponse (`ValueError`, déjà capté en
+     `AnalysisError` par `_generate()`) si `premise_respectee` est `False` : article/sujet repris
+     au cycle suivant plutôt que diffusé.
+   - **Hashtags dans le corps** : contrairement à la proposition initiale (auto-déclaration dans
+     le JSON), c'est mécaniquement vérifiable par du code — nouveau `model_validator` **strict**
+     qui rejette toute réponse contenant `#` dans un tweet autre que le dernier. Plus fiable
+     qu'une auto-déclaration du modèle.
+   - **Longueur ≤260 caractères** : déjà garanti par le validator existant
+     (`_enforce_thread_shape`) — pas de doublon, la proposition de l'utilisateur y faisait déjà
+     écho sans le savoir.
+   - Limite emoji (1/tweet) : reste une consigne de prompt uniquement, pas de validator dédié
+     (détection fiable d'émojis par regex jugée disproportionnée pour ce garde-fou mineur).
+
+**Fichiers concernés** : `settings.py` (3 nouveaux réglages modèle), `thread_pipeline.py`
+(`_gemini()` utilise la nouvelle chaîne), `models.py` (`ThreadWritingResult.premise_respectee` +
+2 nouveaux validators), `analyzer.py` (réécriture de `_THREAD_WRITING_SYSTEM_PROMPT`), tests
+associés (`test_thread_models.py`, `test_analyzer.py`, `test_thread_pipeline.py`).
+
+**Fait quand** : tests sur les 2 nouveaux validators (rejet si `premise_respectee=False`, rejet
+si hashtag hors dernier tweet, non-régression sur la limite de tweets/caractères déjà testée),
+sur l'injection du nouveau contenu de prompt, sur la chaîne de modèles dédiée (`_gemini()`
+n'utilise plus `gemini_model`/`*_fallback_model`). ✔️ Vérifié par tests (173 tests, `ruff`
+propre) — **pas encore observé en conditions réelles** : reste un vrai `thread-resolve` pour
+juger qualitativement le style obtenu (langage anti-IA, rythme, hook+frame) et confirmer que le
+nouveau modèle (`gemini-3.5-flash` et non plus `-lite`) répond correctement au schéma resserré.
+
 ---
 
 ## Ordre d'exécution — où on en est
@@ -731,8 +795,10 @@ candidats bien diversifiés sur plusieurs groupes par lot.
                                                                       on est ici — objectif initial atteint
        └──────────────── socle + métier : fait ────────────────┘   (T4bis / T5bis toujours reportées)
 
-✅T15 → ✅T15bis (threads Twitter quotidiens + idéation hybride) — fait, validé en conditions
-   réelles, indépendant du reste (nouveau pipeline parallèle, nouveaux crons dédiés).
+✅T15 → ✅T15bis → ✅T15ter (threads Twitter quotidiens + idéation hybride + style de
+   rédaction) — indépendant du reste (nouveau pipeline parallèle, nouveaux crons dédiés).
+   T15/T15bis validés en conditions réelles ; T15ter testé (mocks) mais pas encore observé en
+   conditions réelles.
 ```
 
 **Restant concrètement** :
@@ -751,8 +817,10 @@ candidats bien diversifiés sur plusieurs groupes par lot.
   à ajouter `DISCORD_WEBHOOK_TIKTOK` comme secret GitHub Actions pour l'activer en production
   (`.env` local déjà à jour).
 - **T15 / T15bis** — threads Twitter quotidiens + idéation hybride, fait et validé en conditions
-  réelles (Bot Discord créé, secrets GitHub Actions en place, cycle complet observé). Reste un
-  ajustement possible : enrichir `config/thread_concepts.yaml` au fil du temps si le backlog se
+  réelles (Bot Discord créé, secrets GitHub Actions en place, cycle complet observé). **T15ter**
+  (style de rédaction + modèle dédié) codé et testé, reste à observer un vrai `thread-resolve`
+  pour juger qualitativement le résultat. Reste un ajustement possible : enrichir
+  `config/thread_concepts.yaml` au fil du temps si le backlog se
   vide plus vite que prévu.
 
 ---
