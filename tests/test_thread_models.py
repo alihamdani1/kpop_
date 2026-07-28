@@ -3,7 +3,14 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from kpop_bot.models import ThreadTheme, ThreadTopicIdea, ThreadWritingResult, TopicIdeationResult
+from kpop_bot.models import (
+    ThreadConcept,
+    ThreadTheme,
+    ThreadTopicIdea,
+    ThreadTopicWriting,
+    ThreadWritingResult,
+    TopicIdeationResult,
+)
 
 
 def _tweets(n: int, *, length: int = 50) -> list[str]:
@@ -35,15 +42,33 @@ def test_thread_writing_result_accepte_un_tweet_a_la_limite():
     assert len(result.tweets[0]) == 260
 
 
-def test_topic_ideation_result_regroupe_plusieurs_idees():
-    ideas = [
-        ThreadTopicIdea(
-            group_name="Groupe X",
-            theme=ThreadTheme.ANALYSE_COMEBACK,
-            title="Titre",
-            premise="Promesse.",
-        )
-        for _ in range(3)
+def test_topic_ideation_result_regroupe_plusieurs_redactions():
+    """Depuis T15bis, l'IA ne rédige plus que titre/premise pour des paires déjà choisies par
+    le code — elle ne renvoie plus group_name/theme (voir ThreadTopicWriting)."""
+    writings = [
+        ThreadTopicWriting(pair_index=i, title="Titre", premise="Promesse.") for i in range(3)
     ]
-    result = TopicIdeationResult(topics=ideas)
+    result = TopicIdeationResult(topics=writings)
     assert len(result.topics) == 3
+
+
+def test_thread_topic_idea_concept_id_optionnel_pour_retrocompatibilite():
+    """Les topics historiques (avant T15bis, idéation libre) n'ont pas de concept_id — doit
+    rester constructible sans ce champ."""
+    idea = ThreadTopicIdea(
+        group_name="Groupe X",
+        theme=ThreadTheme.ANALYSE_COMEBACK,
+        title="Titre",
+        premise="Promesse.",
+    )
+    assert idea.concept_id is None
+
+
+def test_thread_concept_construction():
+    concept = ThreadConcept(
+        id="rivalite_historique",
+        theme=ThreadTheme.RIVALITE_COMPARAISON,
+        label="Rivalité historique",
+        brief="Compare deux groupes sur un aspect précis.",
+    )
+    assert concept.id == "rivalite_historique"

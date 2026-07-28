@@ -538,7 +538,7 @@ la Route A, clé 2 en priorité (`_tiktok_api_keys`), échec non bloquant (artic
 envoyé), comportement inchangé si le webhook n'est pas configuré (aucun appel Gemini
 supplémentaire). ✔️ Vérifié par tests (mocks) — pas encore observé en conditions réelles.
 
-### 📝 T15 — Threads Twitter quotidiens (backlog Topics + sélection Discord + génération Gemini) — PLANIFIÉ, PAS ENCORE IMPLÉMENTÉ
+### ✅ T15 — Threads Twitter quotidiens (backlog Topics + sélection Discord + génération Gemini) — FAIT, validé en conditions réelles
 
 **Demande** : automatiser la création d'un thread Twitter par jour, avec un vrai flux de
 sélection humaine avant génération (pas un simple envoi automatique) : le système propose 3
@@ -668,7 +668,58 @@ workflows.
 diversifiés ; test réel une fois le Bot Discord créé et les secrets en place — réaction manuelle
 sur Discord détectée par `thread-resolve`, thread reçu avec un message par tweet, bouton "Copier
 le texte" fonctionnel sur mobile (même vérification que celle déjà faite pour `tweet_draft` en
-T6).
+T6). **✔️ Vérifié en conditions réelles** — Bot Discord créé, secrets GitHub Actions ajoutés,
+premier cycle complet observé le 27/07/2026 : picker publié, réaction détectée, thread généré et
+envoyé. Deux corrections apportées suite à ces tests réels (voir T15bis pour le détail complet
+des correctifs livrés le jour même) :
+1. `discord_reactions.seed_reactions` ne gérait pas le rate-limit Discord (429) sur l'ajout de
+   réactions — bien plus strict que celui des webhooks — corrigé avec le même mécanisme de
+   retry que `notifier._post_webhook`.
+2. `notify_thread` mettait l'en-tête "Tweet n/total" et un bloc de code ``` dans le MÊME message
+   que le tweet — le bouton "Copier le texte" de Discord copie tout le contenu brut du message,
+   ce qui cassait le copier-coller mobile. Corrigé en isolant l'en-tête et le tweet dans deux
+   messages distincts (même principe que `tweet_draft` en T6).
+
+### ✅ T15bis — Idéation hybride des Topics (groupes/concepts curés) — FAIT
+
+**Origine** : après les premiers vrais lots générés par l'idéation libre de T15, retour
+utilisateur que certains sujets manquaient de pertinence — attendu d'un modèle *lite* laissé
+libre d'inventer à la fois le groupe, le thème et le sujet en une seule fois, sans aucun levier
+de contrôle qualité. C'est la seule brique de tout le pipeline où l'IA invente la matière
+première plutôt que de la recevoir déjà cadrée par de la config (partout ailleurs — sources RSS,
+`artist_tiers.yaml`, mots-clés France, digest hebdo T12 — la donnée brute vient de code/config,
+l'IA ne fait que rédiger).
+
+**Décision** : idéation hybride.
+- **Groupes** : réutilise `config/artist_tiers.yaml` (déjà curé, pas de fichier redondant).
+- **Concepts viraux** : nouveau `config/thread_concepts.yaml` (18 concepts curés, id/theme/
+  label/brief), éditable par la rédaction sans toucher au code.
+- **Croisement groupe × concept** : 100 % déterministe, en code (`thread_pipeline._candidate_pairs`)
+  — zéro appel Gemini pour choisir la paire. Exclusion dure et définitive des paires déjà en
+  backlog (`storage.used_group_concept_pairs`) — contrairement à l'ancienne fenêtre glissante de
+  14 jours, un couple groupe/concept curé est fini et identifiable exactement, pas besoin d'une
+  fenêtre : il ne doit simplement jamais être régénéré une fois déjà proposé.
+- **Gemini** : rôle réduit à la rédaction — reçoit une liste de paires déjà choisies et ne
+  renvoie qu'un `{pair_index, title, premise}` par paire (`ThreadTopicWriting`), jamais le
+  groupe ni le thème. `run_thread_replenish` valide que les `pair_index` reçus correspondent
+  exactement aux paires soumises (aucun manquant, aucun hors bornes) avant tout usage — sinon le
+  lot entier est ignoré et retenté au cycle suivant, plutôt que d'insérer un topic mal rattaché.
+- **Angles** (`ThreadAngle`) inchangés — déjà déterministes depuis T15.
+- Ordre de parcours du croisement (`_candidate_pairs`) : concepts en boucle externe, groupes en
+  interne — vérifié en conditions réelles que l'ordre inverse faisait qu'un lot de 12 s'épuisait
+  entièrement sur un seul groupe (BTS, premier de `artist_tiers.yaml`) avant de considérer les
+  autres.
+
+**Schéma** : colonne `concept_id` (nullable) ajoutée sur `thread_topics`, migration idempotente
+(même mécanisme que les colonnes `tiktok_*` sur `articles`, nécessaire car la table est déjà en
+production). Rétrocompatible : les topics historiques (idéation libre, `concept_id` NULL)
+restent utilisables tels quels, rien en aval n'en dépend.
+
+**Fait quand** : tests sur le croisement déterministe (dédup, respect de la limite, ordre de
+parcours), sur la validation stricte des `pair_index` (lot ignoré si incohérent), sur la
+migration de la colonne `concept_id`, non-régression sur les topics historiques — 168 tests au
+vert, `ruff` propre. Vérifié avec la vraie config du projet (`thread-replenish --dry-run`) :
+candidats bien diversifiés sur plusieurs groupes par lot.
 
 ---
 
@@ -680,8 +731,8 @@ T6).
                                                                       on est ici — objectif initial atteint
        └──────────────── socle + métier : fait ────────────────┘   (T4bis / T5bis toujours reportées)
 
-📝 T15 (threads Twitter quotidiens) — planifié, indépendant du reste (nouveau pipeline parallèle,
-   nouveaux crons dédiés), pas de dépendance bloquante sur T11/T12.
+✅T15 → ✅T15bis (threads Twitter quotidiens + idéation hybride) — fait, validé en conditions
+   réelles, indépendant du reste (nouveau pipeline parallèle, nouveaux crons dédiés).
 ```
 
 **Restant concrètement** :
@@ -699,8 +750,10 @@ T6).
 - **T14** : salon Discord + webhook créés, prompt révisé (schéma à 6 champs, zéro emoji) — reste
   à ajouter `DISCORD_WEBHOOK_TIKTOK` comme secret GitHub Actions pour l'activer en production
   (`.env` local déjà à jour).
-- **T15** — threads Twitter quotidiens, plan validé, pas encore codé. Nécessite en amont la
-  création d'un Bot Discord (Developer Portal) et de son webhook dédié.
+- **T15 / T15bis** — threads Twitter quotidiens + idéation hybride, fait et validé en conditions
+  réelles (Bot Discord créé, secrets GitHub Actions en place, cycle complet observé). Reste un
+  ajustement possible : enrichir `config/thread_concepts.yaml` au fil du temps si le backlog se
+  vide plus vite que prévu.
 
 ---
 
@@ -768,13 +821,23 @@ T6).
 
 | Sujet | Décision |
 |---|---|
-| Source des Topics | **Génération libre par l'IA**, pas ancrée sur un article du pipeline existant — variété éditoriale prioritaire sur la garantie factuelle stricte. Conséquence assumée : aucun filet déterministe possible ici, la relecture humaine reste la seule protection |
+| Source des Topics | **Génération libre par l'IA** initialement — **remplacé par T15bis** (idéation hybride : groupes/concepts curés en config, croisement déterministe en code, l'IA ne rédige plus que le titre/premise) suite à des sujets jugés parfois peu pertinents en conditions réelles |
 | Interaction Discord (choix parmi 3 options) | **Réactions emoji + sondage périodique** via un Bot Discord (token REST simple, pas de connexion Gateway) — de vrais boutons (Components) exigeraient un serveur HTTP public ou un bot permanent, en rupture avec le principe 100 % gratuit/sans serveur du projet |
 | Diffusion du thread final | **Webhook simple**, comme le reste du pipeline — en-tête et tweet isolés en 2 messages distincts par tweet (jamais fusionnés), même logique que l'isolement du `tweet_draft` en T6. Un bug initial (en-tête + bloc de code dans le même message) cassait le copier-coller mobile — corrigé |
 | Anti-répétition | 3 niveaux : contrainte SQL dure `UNIQUE(topic_id, angle)`, throttle groupe/thème en code (fenêtre glissante), note système côté prompt d'idéation |
 | Modèle de données | 4 niveaux Groups > Themes > Topics > Angles, mais implémenté en 3 tables seulement (`thread_topics`, `thread_selections`, `threads`) — Groups/Themes sont des attributs, pas des tables séparées, pour éviter une abstraction inutile |
 
+### Nouvelle décision — idéation hybride des Topics (T15bis)
+
+| Sujet | Décision |
+|---|---|
+| Qui choisit le groupe et le concept ? | **Le code**, par croisement déterministe (`thread_pipeline._candidate_pairs`) sur deux listes curées (`artist_tiers.yaml` + nouveau `thread_concepts.yaml`) — l'IA ne les choisit plus, elle ne fait que rédiger un titre/premise sur-mesure pour la paire déjà fixée |
+| Anti-répétition des paires | Exclusion **dure et définitive** (`storage.used_group_concept_pairs`), pas une fenêtre glissante — un couple groupe/concept curé est fini et identifiable exactement, contrairement à l'ancienne idéation libre |
+| Robustesse de la réponse IA | `run_thread_replenish` vérifie que les `pair_index` reçus correspondent exactement aux paires soumises ; tout écart fait ignorer le lot entier plutôt que d'insérer un topic mal rattaché |
+| Rétrocompatibilité | Topics historiques (`concept_id` NULL) conservés tels quels — migration idempotente, rien en aval n'exige ce champ |
+
 Plus aucun point structurant n'est ouvert sur l'architecture initiale. Les seuls ajustements
 restants (liste de sources étendue au-delà des 3 retenues, contenu précis d'`artist_tiers.yaml`,
-mapping exact des badges, détails de configuration de T12) sont des paramètres modifiables sans
-toucher au code, ou des sous-tâches déjà découpées ci-dessus.
+mapping exact des badges, détails de configuration de T12, enrichissement de
+`thread_concepts.yaml` au fil du temps) sont des paramètres modifiables sans toucher au code, ou
+des sous-tâches déjà découpées ci-dessus.

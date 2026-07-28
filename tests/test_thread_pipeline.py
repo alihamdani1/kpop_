@@ -8,9 +8,23 @@ import pytest
 import respx
 
 from kpop_bot import analyzer, storage
-from kpop_bot.models import ThreadAngle, ThreadTheme, ThreadTopicIdea, ThreadWritingResult
+from kpop_bot.models import (
+    ThreadAngle,
+    ThreadConcept,
+    ThreadTheme,
+    ThreadTopicIdea,
+    ThreadTopicWriting,
+    ThreadWritingResult,
+    TopicIdeationResult,
+)
 from kpop_bot.settings import Settings
-from kpop_bot.thread_pipeline import run_thread_replenish, run_thread_resolve, run_thread_select
+from kpop_bot.thread_pipeline import (
+    _candidate_pairs,
+    _load_viral_groups,
+    run_thread_replenish,
+    run_thread_resolve,
+    run_thread_select,
+)
 
 _BASE = "https://discord.com/api/v10"
 
@@ -61,6 +75,28 @@ def _seed_topics(settings: Settings, n: int = 4) -> list[int]:
     return ids
 
 
+def _write_tiny_config(tmp_path: Path) -> tuple[Path, Path]:
+    """Config groupes/concepts minimale et contrôlée (T15bis) — pour prédire exactement le
+    croisement déterministe produit par `_candidate_pairs`, plutôt que de dépendre de la vraie
+    config du projet (qui grossit avec le temps)."""
+    tiers_path = tmp_path / "artist_tiers.yaml"
+    tiers_path.write_text("tier_1:\n  - Groupe A\n  - Groupe B\n", encoding="utf-8")
+    concepts_path = tmp_path / "thread_concepts.yaml"
+    concepts_path.write_text(
+        "concepts:\n"
+        "  - id: concept_1\n"
+        "    theme: ANALYSE_COMEBACK\n"
+        "    label: Concept 1\n"
+        "    brief: Brief 1.\n"
+        "  - id: concept_2\n"
+        "    theme: RECAP_SCANDALE\n"
+        "    label: Concept 2\n"
+        "    brief: Brief 2.\n",
+        encoding="utf-8",
+    )
+    return tiers_path, concepts_path
+
+
 # --- run_thread_replenish ---
 
 
@@ -90,26 +126,143 @@ def test_run_thread_replenish_dry_run_n_appelle_pas_gemini(settings, monkeypatch
     conn.close()
 
 
-def test_run_thread_replenish_genere_un_lot_si_backlog_bas(settings, monkeypatch):
-    from kpop_bot.models import TopicIdeationResult
+def test_run_thread_replenish_genere_un_lot_si_backlog_bas(settings, monkeypatch, tmp_path):
+    tiers_path, concepts_path = _write_tiny_config(tmp_path)
+    settings = settings.model_copy(
+        update={
+            "thread_topic_backlog_min": 5,
+            "thread_ideation_batch_size": 4,
+            "artist_tiers_path": tiers_path,
+            "thread_concepts_path": concepts_path,
+        }
+    )
+    _seed_topics(settings, n=1)  # topic historique (concept_id=None) — n'entrave pas le croisement
 
-    settings = settings.model_copy(update={"thread_topic_backlog_min": 5})
-    _seed_topics(settings, n=1)
+    # Croisement attendu (concept-outer, groupe-inner — voir _candidate_pairs) :
+    # 0=(Groupe A, concept_1), 1=(Groupe B, concept_1), 2=(Groupe A, concept_2),
+    # 3=(Groupe B, concept_2).
+    writing_result = TopicIdeationResult(
+        topics=[
+            ThreadTopicWriting(pair_index=i, title=f"Titre {i}", premise=f"Promesse {i}.")
+            for i in range(4)
+        ]
+    )
+    captured: dict = {}
 
-    result = TopicIdeationResult(
-        topics=[_idea(title="Nouveau sujet 1"), _idea(title="Nouveau sujet 2")]
+    def _fake_ideate(self, *, candidate_pairs):
+        captured["pairs"] = candidate_pairs
+        return writing_result, 50, 20
+
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "ideate_thread_topics", _fake_ideate)
+    inserted = run_thread_replenish(settings)
+    assert inserted == 4
+
+    assert [group for group, _ in captured["pairs"]] == [
+        "Groupe A",
+        "Groupe B",
+        "Groupe A",
+        "Groupe B",
+    ]
+    assert [concept.id for _, concept in captured["pairs"]] == [
+        "concept_1",
+        "concept_1",
+        "concept_2",
+        "concept_2",
+    ]
+
+    conn = storage.init_db(settings.db_path)
+    assert storage.backlog_topic_count(conn) == 5  # 1 historique + 4 nouveaux
+    rows = {
+        row["title"]: row["concept_id"]
+        for row in conn.execute("SELECT title, concept_id FROM thread_topics")
+    }
+    assert rows["Titre 0"] == "concept_1"
+    assert rows["Titre 1"] == "concept_1"
+    assert rows["Titre 2"] == "concept_2"
+    assert rows["Titre 3"] == "concept_2"
+    conn.close()
+
+
+def test_run_thread_replenish_ignore_le_lot_si_pair_index_incoherents(
+    settings, monkeypatch, tmp_path
+):
+    """L'IA ne doit jamais pouvoir dévier des paires imposées — un pair_index hors bornes ou
+    incomplet doit faire ignorer tout le lot plutôt que d'insérer un topic mal rattaché."""
+    tiers_path, concepts_path = _write_tiny_config(tmp_path)
+    settings = settings.model_copy(
+        update={
+            "thread_topic_backlog_min": 5,
+            "thread_ideation_batch_size": 2,
+            "artist_tiers_path": tiers_path,
+            "thread_concepts_path": concepts_path,
+        }
+    )
+    bad_result = TopicIdeationResult(
+        topics=[ThreadTopicWriting(pair_index=99, title="X", premise="Y.")]
     )
     monkeypatch.setattr(
         analyzer.GeminiAnalyzer,
         "ideate_thread_topics",
-        lambda self, *, batch_size, excluded_pairs: (result, 50, 20),
+        lambda self, *, candidate_pairs: (bad_result, 10, 5),
     )
     inserted = run_thread_replenish(settings)
-    assert inserted == 2
-
+    assert inserted == 0
     conn = storage.init_db(settings.db_path)
-    assert storage.backlog_topic_count(conn) == 3  # 1 déjà présent + 2 nouveaux
+    assert storage.backlog_topic_count(conn) == 0
     conn.close()
+
+
+def test_run_thread_replenish_dry_run_journalise_les_paires(
+    settings, monkeypatch, tmp_path, caplog
+):
+    tiers_path, concepts_path = _write_tiny_config(tmp_path)
+    settings = settings.model_copy(
+        update={
+            "thread_topic_backlog_min": 5,
+            "artist_tiers_path": tiers_path,
+            "thread_concepts_path": concepts_path,
+        }
+    )
+
+    def _fail_if_called(self, **kwargs):
+        pytest.fail("ideate_thread_topics ne doit pas être appelé en dry-run")
+
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "ideate_thread_topics", _fail_if_called)
+    with caplog.at_level("INFO"):
+        assert run_thread_replenish(settings, dry_run=True) == 0
+    assert any("Groupe A" in record.message for record in caplog.records)
+
+
+# --- Croisement déterministe (fonctions pures, aucun réseau/base) ---
+
+
+def test_candidate_pairs_exclut_les_paires_deja_utilisees():
+    concepts = [
+        ThreadConcept(id="c1", theme=ThreadTheme.ANALYSE_COMEBACK, label="C1", brief="B1"),
+        ThreadConcept(id="c2", theme=ThreadTheme.RECAP_SCANDALE, label="C2", brief="B2"),
+    ]
+    used = {("Groupe A", "c1")}
+    pairs = _candidate_pairs(["Groupe A", "Groupe B"], concepts, used, limit=10)
+    assert ("Groupe A", concepts[0]) not in pairs
+    assert len(pairs) == 3  # (A,c2), (B,c1), (B,c2)
+
+
+def test_candidate_pairs_respecte_la_limite():
+    concepts = [
+        ThreadConcept(id=f"c{i}", theme=ThreadTheme.ANALYSE_COMEBACK, label=f"C{i}", brief="B")
+        for i in range(5)
+    ]
+    pairs = _candidate_pairs(["Groupe A"], concepts, set(), limit=2)
+    assert len(pairs) == 2
+
+
+def test_load_viral_groups_deduplique_entre_tiers(settings, tmp_path):
+    tiers_path = tmp_path / "artist_tiers.yaml"
+    tiers_path.write_text(
+        "tier_1:\n  - Groupe A\ntier_2:\n  - Groupe B\n  - Groupe A\n", encoding="utf-8"
+    )
+    settings = settings.model_copy(update={"artist_tiers_path": tiers_path})
+    assert _load_viral_groups(settings) == ["Groupe A", "Groupe B"]
 
 
 # --- run_thread_select ---

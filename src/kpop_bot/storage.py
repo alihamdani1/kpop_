@@ -132,12 +132,25 @@ _MIGRATED_COLUMNS = {
     "tiktok_caption_hashtags": "TEXT NOT NULL DEFAULT '[]'",
 }
 
+# Colonne ajoutée après coup sur `thread_topics` (T15bis — idéation hybride) : cette table est
+# déjà en production (backlog réel, crons actifs dessus), même logique de migration idempotente
+# que `_MIGRATED_COLUMNS` ci-dessus pour `articles`. NULL pour les topics historiques générés par
+# l'ancienne idéation libre — ils restent utilisables tels quels (rien en aval n'exige ce champ).
+_THREAD_TOPICS_MIGRATED_COLUMNS = {
+    "concept_id": "TEXT",
+}
+
+
+def _migrate_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    for column, coltype in columns.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(articles)").fetchall()}
-    for column, coltype in _MIGRATED_COLUMNS.items():
-        if column not in existing:
-            conn.execute(f"ALTER TABLE articles ADD COLUMN {column} {coltype}")
+    _migrate_columns(conn, "articles", _MIGRATED_COLUMNS)
+    _migrate_columns(conn, "thread_topics", _THREAD_TOPICS_MIGRATED_COLUMNS)
     conn.commit()
 
 
@@ -341,14 +354,28 @@ def insert_topic_ideas(conn: sqlite3.Connection, ideas: list[ThreadTopicIdea]) -
     for idea in ideas:
         cur = conn.execute(
             """
-            INSERT INTO thread_topics (group_name, theme, title, premise, created_at, source)
-            VALUES (?, ?, ?, ?, ?, 'ai_ideation')
+            INSERT INTO thread_topics
+                (group_name, theme, title, premise, created_at, source, concept_id)
+            VALUES (?, ?, ?, ?, ?, 'ai_ideation', ?)
             """,
-            (idea.group_name, idea.theme.value, idea.title, idea.premise, now),
+            (idea.group_name, idea.theme.value, idea.title, idea.premise, now, idea.concept_id),
         )
         ids.append(int(cur.lastrowid))
     conn.commit()
     return ids
+
+
+def used_group_concept_pairs(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    """Paires (group_name, concept_id) déjà présentes en backlog — exclusion dure pour le
+    croisement déterministe du réapprovisionnement (T15bis, voir
+    `thread_pipeline._candidate_pairs`). Contrairement à l'ancienne idéation libre, un couple
+    groupe/concept curé est fini et identifiable exactement : pas besoin d'une fenêtre
+    glissante comme `recent_group_theme_pairs`, un couple ne doit simplement jamais être
+    régénéré une fois déjà proposé."""
+    rows = conn.execute(
+        "SELECT group_name, concept_id FROM thread_topics WHERE concept_id IS NOT NULL"
+    ).fetchall()
+    return {(row["group_name"], row["concept_id"]) for row in rows}
 
 
 def backlog_topic_count(conn: sqlite3.Connection) -> int:
@@ -585,6 +612,7 @@ def _row_to_topic(row: sqlite3.Row) -> ThreadTopicRecord:
         if row["last_offered_at"]
         else None,
         source=row["source"],
+        concept_id=row["concept_id"],
     )
 
 

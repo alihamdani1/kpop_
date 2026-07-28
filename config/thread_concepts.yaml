@@ -1,0 +1,131 @@
+# Concepts viraux curés pour les threads Twitter quotidiens (T15bis — idéation hybride).
+#
+# Chaque concept est croisé en code avec un groupe de config/artist_tiers.yaml pour former un
+# Topic candidat (voir thread_pipeline.py) — l'IA ne choisit ni le groupe ni le concept, elle ne
+# rédige qu'un titre + premise sur-mesure pour la paire déjà décidée (voir analyzer.py
+# `ideate_thread_topics`). Ajouter/retirer un concept ne demande aucune modification de code.
+#
+# `theme` doit être une valeur de l'enum ThreadTheme (models.py). `brief` est la matière première
+# donnée à l'IA pour rédiger le titre/premise — reste général (s'applique à n'importe quel
+# groupe), la spécificité vient de la rédaction IA au moment du croisement avec un groupe précis.
+
+concepts:
+  - id: rivalite_generationnelle
+    theme: RIVALITE_COMPARAISON
+    label: "Rivalité de génération"
+    brief: >
+      Compare le groupe à un autre groupe d'une génération différente (2e vs 4e génération par
+      exemple) sur un aspect précis et vérifiable : longévité, influence, évolution du genre.
+
+  - id: duel_de_comeback
+    theme: RIVALITE_COMPARAISON
+    label: "Duel de comebacks"
+    brief: >
+      Compare deux sorties concurrentes sur une période proche, sur la réception critique et
+      commerciale — sans dénigrer, avec des faits connus.
+
+  - id: evolution_visuelle
+    theme: RETROSPECTIVE_CARRIERE
+    label: "Évolution du concept visuel"
+    brief: >
+      Retrace comment l'image et les concepts esthétiques du groupe ont évolué entre leurs
+      différentes eras.
+
+  - id: debuts_vs_aujourdhui
+    theme: RETROSPECTIVE_CARRIERE
+    label: "Débuts vs aujourd'hui"
+    brief: >
+      Compare le groupe à ses débuts et sa version actuelle : son, maturité, ambition
+      artistique.
+
+  - id: identite_sonore
+    theme: ANALYSE_COMEBACK
+    label: "Identité sonore"
+    brief: >
+      Analyse ce qui rend la signature musicale du groupe reconnaissable, à travers deux titres
+      différents de leur discographie.
+
+  - id: concept_album
+    theme: ANALYSE_COMEBACK
+    label: "Concept d'album"
+    brief: >
+      Décortique la cohérence thématique et visuelle d'un album ou d'une ère marquante du
+      groupe.
+
+  - id: polemique_reexaminee
+    theme: RECAP_SCANDALE
+    label: "Polémique réexaminée avec le recul"
+    brief: >
+      Revient sur une controverse déjà connue et publique avec du recul, sans relancer la
+      polémique elle-même ni prendre parti.
+
+  - id: gestion_de_crise
+    theme: RECAP_SCANDALE
+    label: "Gestion de crise"
+    brief: >
+      Analyse comment le groupe ou son agence a géré publiquement une situation délicate déjà
+      connue.
+
+  - id: tournee_france
+    theme: CONNEXION_FRANCE
+    label: "Historique des tournées en France"
+    brief: >
+      Retrace la présence du groupe en France : concerts, dates marquantes, accueil du public.
+
+  - id: fandom_francophone
+    theme: CONNEXION_FRANCE
+    label: "Fandom francophone"
+    brief: >
+      Explore la spécificité de la communauté de fans française ou francophone du groupe.
+
+  - id: mythe_trainee
+    theme: MYTHE_VS_REALITE
+    label: "Mythe du système des trainees"
+    brief: >
+      Déconstruit une idée reçue sur la formation des idols (durée, rigueur, réalité vs
+      fantasme) en s'appuyant sur le parcours connu du groupe.
+
+  - id: mythe_recette_magique
+    theme: MYTHE_VS_REALITE
+    label: "Le mythe de la recette magique"
+    brief: >
+      Interroge l'idée qu'un succès viral du groupe obéirait à une formule reproductible.
+
+  - id: record_marquant
+    theme: RECORD_ANECDOTE
+    label: "Record marquant remis en perspective"
+    brief: >
+      Explique pourquoi un record connu du groupe (vues, ventes, streams) est réellement
+      significatif, pas juste un chiffre isolé.
+
+  - id: anecdote_meconnue
+    theme: RECORD_ANECDOTE
+    label: "Anecdote méconnue"
+    brief: >
+      Met en lumière un fait peu connu mais vérifiable de l'histoire du groupe.
+
+  - id: auto_composition
+    theme: COULISSES_INDUSTRIE
+    label: "L'auto-production comme force motrice"
+    brief: >
+      Explore le rôle des membres du groupe dans l'écriture ou la production de leur musique.
+
+  - id: structure_agence
+    theme: COULISSES_INDUSTRIE
+    label: "Coulisses de l'agence"
+    brief: >
+      Explique le fonctionnement connu de l'agence ou du système de promotion autour du groupe.
+
+  - id: rituel_fandom
+    theme: CULTURE_FANS
+    label: "Rituels de fandom"
+    brief: >
+      Décrit une pratique culturelle propre aux fans du groupe (lightsticks, fanchants,
+      surnoms, rituels de concert).
+
+  - id: theorie_fan
+    theme: CULTURE_FANS
+    label: "Théorie de fan"
+    brief: >
+      Présente une théorie ou interprétation populaire chez les fans autour d'une œuvre ou d'un
+      élément connu du groupe.

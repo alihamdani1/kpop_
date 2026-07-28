@@ -41,6 +41,64 @@ def test_insert_topic_ideas_puis_backlog_topic_count(conn):
     assert storage.backlog_topic_count(conn) == 2
 
 
+def test_insert_topic_ideas_conserve_concept_id(conn):
+    """T15bis : le concept_id (croisement déterministe) doit être persisté et relu."""
+    [topic_id] = storage.insert_topic_ideas(conn, [_idea(concept_id="rivalite_historique")])
+    assert storage.get_topic(conn, topic_id).concept_id == "rivalite_historique"
+
+
+def test_insert_topic_ideas_concept_id_absent_reste_none(conn):
+    """Rétrocompatibilité : un topic sans concept_id (ancienne idéation libre) reste valide."""
+    [topic_id] = storage.insert_topic_ideas(conn, [_idea()])
+    assert storage.get_topic(conn, topic_id).concept_id is None
+
+
+def test_used_group_concept_pairs_ignore_les_topics_sans_concept_id(conn):
+    storage.insert_topic_ideas(
+        conn,
+        [
+            _idea(group_name="Groupe A", concept_id="c1"),
+            _idea(group_name="Groupe B"),  # historique, concept_id=None
+        ],
+    )
+    assert storage.used_group_concept_pairs(conn) == {("Groupe A", "c1")}
+
+
+def test_migrate_schema_ajoute_concept_id_sur_thread_topics(tmp_path: Path):
+    """Simule une base thread_topics créée avant T15bis (sans concept_id) — la migration doit
+    l'ajouter sans erreur, même avec des lignes déjà présentes."""
+    path = tmp_path / "legacy_threads.db"
+    legacy_conn = sqlite3.connect(path)
+    legacy_conn.execute(
+        """
+        CREATE TABLE thread_topics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_name TEXT NOT NULL,
+            theme TEXT NOT NULL,
+            title TEXT NOT NULL,
+            premise TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            last_offered_at TEXT,
+            source TEXT NOT NULL DEFAULT 'ai_ideation'
+        )
+        """
+    )
+    legacy_conn.execute(
+        "INSERT INTO thread_topics (group_name, theme, title, premise, created_at) "
+        "VALUES ('Groupe X', 'ANALYSE_COMEBACK', 'Titre', 'Promesse', '2026-07-24')"
+    )
+    legacy_conn.commit()
+    legacy_conn.close()
+
+    conn = storage.init_db(path)  # doit migrer sans écraser la ligne déjà présente
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(thread_topics)").fetchall()}
+    assert "concept_id" in columns
+    row = conn.execute("SELECT * FROM thread_topics WHERE group_name = 'Groupe X'").fetchone()
+    assert row["title"] == "Titre"
+    assert row["concept_id"] is None
+    conn.close()
+
+
 def test_available_angles_toutes_disponibles_au_depart(conn):
     [topic_id] = storage.insert_topic_ideas(conn, [_idea()])
     assert set(storage.available_angles(conn, topic_id)) == set(ThreadAngle)

@@ -20,7 +20,7 @@ from kpop_bot.models import (
     ClassificationResult,
     Route,
     ThreadAngle,
-    ThreadTheme,
+    ThreadConcept,
     ThreadTopicRecord,
     ThreadWritingResult,
     TikTokScriptResult,
@@ -47,6 +47,14 @@ class QuotaExceededError(AnalysisError):
 def load_artist_tiers(path: Path) -> dict[str, list[str]]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return {key: value for key, value in data.items() if key.startswith("tier_")}
+
+
+def load_thread_concepts(path: Path) -> list[ThreadConcept]:
+    """Charge les concepts viraux curés (T15bis, `config/thread_concepts.yaml`) — matière
+    première fixe du croisement déterministe groupe × concept, voir
+    `thread_pipeline._candidate_pairs`."""
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return [ThreadConcept(**item) for item in data.get("concepts", [])]
 
 
 def _format_artist_tiers(tiers: dict[str, list[str]]) -> str:
@@ -259,65 +267,45 @@ Réponds uniquement selon le schéma JSON fourni.
 
 
 # --- T15 : threads Twitter quotidiens — idéation de sujets + rédaction du thread. Prompts
-# dédiés (un par forme de sortie, même principe qu'en T14) : les Topics sont générés librement
-# par l'IA, pas ancrés sur un article du pipeline existant (décision actée, voir TODO.md T15) —
-# donc aucun filet déterministe possible ici, contrairement au filet France/record. La relecture
-# humaine avant copier-coller sur X reste la seule protection contre une éventuelle invention. ---
-
-_THREAD_THEME_DESCRIPTIONS: dict[ThreadTheme, str] = {
-    ThreadTheme.RIVALITE_COMPARAISON: "comparaison ou rivalité entre artistes/groupes/eras.",
-    ThreadTheme.RETROSPECTIVE_CARRIERE: (
-        "retour sur le parcours/l'évolution d'un artiste ou groupe."
-    ),
-    ThreadTheme.ANALYSE_COMEBACK: (
-        "analyse de fond d'une sortie musicale, au-delà de la simple annonce."
-    ),
-    ThreadTheme.RECAP_SCANDALE: "remise en contexte d'une controverse ou polémique déjà connue.",
-    ThreadTheme.CONNEXION_FRANCE: (
-        "lien entre la scène K-pop et la France (concerts, fandom, culture)."
-    ),
-    ThreadTheme.MYTHE_VS_REALITE: "déconstruction d'une idée reçue sur la K-pop ou un artiste.",
-    ThreadTheme.RECORD_ANECDOTE: "record, chiffre ou anecdote marquante remise en perspective.",
-    ThreadTheme.COULISSES_INDUSTRIE: (
-        "fonctionnement de l'industrie (contrats, agences, entraînement...)."
-    ),
-    ThreadTheme.CULTURE_FANS: "dynamiques de fandom, rituels, codes culturels des fans.",
-}
+# dédiés (un par forme de sortie, même principe qu'en T14). Depuis T15bis, l'idéation ne
+# choisit plus librement le groupe/thème : ils viennent d'un croisement déterministe
+# groupe × concept curé (voir thread_pipeline._candidate_pairs) — seule la rédaction du
+# titre/premise reste confiée à l'IA. La relecture humaine avant copier-coller sur X reste la
+# protection ultime avant publication, comme pour tout le reste du pipeline. ---
 
 
-def _format_theme_list() -> str:
+def _format_candidate_pairs(pairs: list[tuple[str, ThreadConcept]]) -> str:
     return "\n".join(
-        f"- {theme.value} : {desc}" for theme, desc in _THREAD_THEME_DESCRIPTIONS.items()
+        f'- pair_index={index} : groupe "{group}", concept "{concept.label}" — '
+        f"{concept.brief.strip()}"
+        for index, (group, concept) in enumerate(pairs)
     )
 
 
+# T15bis — idéation hybride : les paires (groupe, concept) sont choisies en amont, en code,
+# par croisement déterministe (voir thread_pipeline._candidate_pairs). L'IA ne rédige plus que
+# le titre/premise pour chaque paire déjà fixée — elle ne peut plus inventer ni le groupe ni le
+# thème, ce qui élimine le risque d'un sujet halluciné ou hors-sol (voir TODO.md T15bis).
 _THREAD_IDEATION_SYSTEM_PROMPT = """\
 Tu es responsable éditorial(e) d'un média francophone spécialisé K-pop, en charge du contenu \
-Twitter/X. Ta mission : proposer un lot de {batch_size} sujets de threads Twitter — pas \
-rattachés à une actu précise du jour, mais des sujets éditoriaux solides et récurrents sur la \
-scène K-pop (rétrospectives, comparaisons, anecdotes marquantes, coulisses de l'industrie...).
+Twitter/X. On te fournit ci-dessous une liste de {count} paires (groupe, concept) déjà choisies \
+— ta seule mission est de rédiger, pour CHAQUE paire, un titre court et une "premise" (1-2 \
+phrases : la promesse de fond du sujet) qui exploitent spécifiquement ce groupe et ce concept. \
+Tu ne dois JAMAIS changer le groupe ni le concept proposé, ni en inventer d'autres — uniquement \
+écrire un contenu sur-mesure pour le lien entre les deux.
 
-## Table de référence — groupes/artistes actifs
-{artist_tiers}
-
-## Thèmes disponibles (choisis-en un par sujet)
-{themes}
+## Paires à traiter
+{pairs}
 
 ## Consignes
-- Chaque sujet a un `group_name` (un groupe/artiste précis de préférence, ou une portée plus \
-générale du type "industrie K-pop" si le sujet dépasse un seul act), un `theme` (voir liste \
-ci-dessus), un `title` court, et une `premise` (1-2 phrases : la promesse de fond du sujet, ce \
-qu'un thread dessus devrait démontrer ou raconter).
-- Reste sur des faits largement connus et vérifiables (pas de statistique ou de citation \
-précise dont tu n'es pas sûr·e) — un humain relira toujours le thread final avant publication, \
-mais ne pars pas d'une prémisse déjà fausse.
-- Ne propose JAMAIS un sujet dont le couple (groupe, thème) est déjà dans la liste ci-dessous — \
-ils ont été traités récemment, propose autre chose.
+- Réponds pour CHAQUE paire ci-dessus, en rappelant son `pair_index` pour un rattachement sûr.
+- Le titre et la premise doivent être spécifiques au groupe cité — évite un texte générique qui \
+s'appliquerait tel quel à n'importe quel groupe.
+- Reste sur des faits largement connus et vérifiables — un humain relira toujours le thread \
+final avant publication, mais ne pars pas d'une prémisse déjà fausse.
 
-## Combinaisons (groupe, thème) déjà traitées récemment — À ÉVITER
-{excluded_pairs}
-
-Réponds uniquement selon le schéma JSON fourni ({batch_size} sujets).
+Réponds uniquement selon le schéma JSON fourni ({count} éléments, un par paire, chacun avec son \
+`pair_index`).
 """
 
 _THREAD_ANGLE_INSTRUCTIONS: dict[ThreadAngle, str] = {
@@ -499,22 +487,21 @@ class GeminiAnalyzer:
         return self._generate_with_fallback(system_prompt, user_content, TikTokScriptResult)
 
     def ideate_thread_topics(
-        self, *, batch_size: int, excluded_pairs: set[tuple[str, str]]
+        self, *, candidate_pairs: list[tuple[str, ThreadConcept]]
     ) -> tuple[TopicIdeationResult, int, int]:
-        """1 seul appel pour réapprovisionner tout le backlog de Topics (T15) — même principe de
-        coût maîtrisé que le digest hebdomadaire (T12) : un appel par lot, pas un par sujet."""
-        excluded_text = (
-            "\n".join(f"- {group} / {theme}" for group, theme in sorted(excluded_pairs))
-            if excluded_pairs
-            else "(aucune)"
-        )
+        """1 seul appel pour réapprovisionner le backlog de Topics (T15bis) — même principe de
+        coût maîtrisé que le digest hebdomadaire (T12) : un appel par lot, pas un par sujet. Les
+        paires (groupe, concept) sont déjà choisies par le code avant cet appel (croisement
+        déterministe, voir `thread_pipeline._candidate_pairs`) — l'IA ne rédige que le
+        titre/premise, elle ne peut plus inventer ni le groupe ni le thème."""
         system_prompt = _THREAD_IDEATION_SYSTEM_PROMPT.format(
-            batch_size=batch_size,
-            artist_tiers=self._artist_tiers_text,
-            themes=_format_theme_list(),
-            excluded_pairs=excluded_text,
+            count=len(candidate_pairs),
+            pairs=_format_candidate_pairs(candidate_pairs),
         )
-        user_content = f"Propose {batch_size} nouveaux sujets de thread."
+        user_content = (
+            f"Rédige un titre et une premise pour chacune des {len(candidate_pairs)} paires "
+            "ci-dessus."
+        )
         return self._generate_with_fallback(system_prompt, user_content, TopicIdeationResult)
 
     def _pick_hook_label(self, recent_hook_labels: list[str]) -> str:
@@ -626,6 +613,7 @@ __all__ = [
     "QuotaExceededError",
     "GeminiAnalyzer",
     "load_artist_tiers",
+    "load_thread_concepts",
     "matches_france_keywords",
     "matches_viral_milestone",
 ]

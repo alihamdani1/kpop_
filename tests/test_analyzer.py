@@ -6,7 +6,15 @@ import pytest
 from google.genai import errors
 
 from kpop_bot import analyzer
-from kpop_bot.models import Category, Route, ThreadAngle, ThreadTheme, ThreadTopicRecord, Virality
+from kpop_bot.models import (
+    Category,
+    Route,
+    ThreadAngle,
+    ThreadConcept,
+    ThreadTheme,
+    ThreadTopicRecord,
+    Virality,
+)
 
 # --- Filet de sécurité mots-clés France : fonction pure, aucun réseau. ---
 
@@ -533,39 +541,47 @@ def test_throttle_desactive_si_min_interval_nul(monkeypatch):
     instance._throttle()  # même appelé deux fois de suite, sans délai
 
 
-# --- T15 : idéation de Topics + rédaction de thread. Génération libre, prompts dédiés. ---
+# --- T15bis : idéation hybride — paires (groupe, concept) déjà choisies par le code, l'IA ne
+# rédige que le titre/premise. Rédaction de thread, prompts dédiés. ---
 
 
-def test_ideate_thread_topics_renvoie_le_lot_et_injecte_les_couples_exclus(gemini, monkeypatch):
+def _concept(**overrides) -> ThreadConcept:
+    defaults = dict(
+        id="rivalite_historique",
+        theme=ThreadTheme.RIVALITE_COMPARAISON,
+        label="Rivalité historique",
+        brief="Compare deux groupes sur un aspect précis et vérifiable.",
+    )
+    defaults.update(overrides)
+    return ThreadConcept(**defaults)
+
+
+def test_ideate_thread_topics_renvoie_le_lot_et_injecte_les_paires(gemini, monkeypatch):
     captured_prompts: list[str] = []
 
     def _fake_generate(*, model, contents, config):
         captured_prompts.append(config.system_instruction)
         return _FakeResponse(
-            {
-                "topics": [
-                    {
-                        "group_name": "Groupe X",
-                        "theme": "ANALYSE_COMEBACK",
-                        "title": "Titre",
-                        "premise": "Promesse.",
-                    }
-                ]
-            }
+            {"topics": [{"pair_index": 0, "title": "Titre", "premise": "Promesse."}]}
         )
 
     monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
     result, tokens_in, tokens_out = gemini.ideate_thread_topics(
-        batch_size=1, excluded_pairs={("Groupe Y", "RECAP_SCANDALE")}
+        candidate_pairs=[("Groupe X", _concept())]
     )
     assert len(result.topics) == 1
-    assert result.topics[0].theme == ThreadTheme.ANALYSE_COMEBACK
+    assert result.topics[0].pair_index == 0
+    assert result.topics[0].title == "Titre"
     assert tokens_in == 100
     assert tokens_out == 42
-    assert "Groupe Y / RECAP_SCANDALE" in captured_prompts[0]
+    # La paire (groupe, concept) déjà choisie est bien injectée dans le prompt — l'IA n'a plus
+    # à choisir ni le groupe ni le concept, seulement à en rédiger le titre/premise.
+    assert "Groupe X" in captured_prompts[0]
+    assert "Rivalité historique" in captured_prompts[0]
+    assert "Compare deux groupes" in captured_prompts[0]
 
 
-def test_ideate_thread_topics_sans_exclusion_reste_sur(gemini, monkeypatch):
+def test_ideate_thread_topics_plusieurs_paires_sont_toutes_injectees(gemini, monkeypatch):
     captured_prompts: list[str] = []
 
     def _fake_generate(*, model, contents, config):
@@ -573,19 +589,23 @@ def test_ideate_thread_topics_sans_exclusion_reste_sur(gemini, monkeypatch):
         return _FakeResponse(
             {
                 "topics": [
-                    {
-                        "group_name": "Groupe X",
-                        "theme": "ANALYSE_COMEBACK",
-                        "title": "Titre",
-                        "premise": "Promesse.",
-                    }
+                    {"pair_index": 0, "title": "Titre A", "premise": "Promesse A."},
+                    {"pair_index": 1, "title": "Titre B", "premise": "Promesse B."},
                 ]
             }
         )
 
     monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
-    gemini.ideate_thread_topics(batch_size=1, excluded_pairs=set())
-    assert "(aucune)" in captured_prompts[0]
+    pairs = [
+        ("Groupe X", _concept(id="c1", label="Concept 1")),
+        ("Groupe Y", _concept(id="c2", label="Concept 2")),
+    ]
+    result, _, _ = gemini.ideate_thread_topics(candidate_pairs=pairs)
+    assert {item.pair_index for item in result.topics} == {0, 1}
+    assert "pair_index=0" in captured_prompts[0]
+    assert "pair_index=1" in captured_prompts[0]
+    assert "Groupe Y" in captured_prompts[0]
+    assert "Concept 2" in captured_prompts[0]
 
 
 def _topic(**overrides) -> ThreadTopicRecord:

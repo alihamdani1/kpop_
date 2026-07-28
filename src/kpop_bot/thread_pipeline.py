@@ -9,7 +9,7 @@ import logging
 from dataclasses import dataclass
 
 from kpop_bot import analyzer, discord_reactions, notifier, storage
-from kpop_bot.models import ThreadAngle
+from kpop_bot.models import ThreadAngle, ThreadConcept, ThreadTopicIdea
 from kpop_bot.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -34,10 +34,52 @@ def _gemini(settings: Settings) -> analyzer.GeminiAnalyzer:
     )
 
 
+def _load_viral_groups(settings: Settings) -> list[str]:
+    """Groupes viraux (T15bis) — réutilise `config/artist_tiers.yaml`, déjà curé et maintenu
+    pour le reste du pipeline, plutôt qu'une liste redondante dédiée aux threads."""
+    tiers = analyzer.load_artist_tiers(settings.artist_tiers_path)
+    groups: list[str] = []
+    for tier_name in sorted(tiers):
+        for group in tiers[tier_name]:
+            if group not in groups:
+                groups.append(group)
+    return groups
+
+
+def _candidate_pairs(
+    groups: list[str],
+    concepts: list[ThreadConcept],
+    used_pairs: set[tuple[str, str]],
+    *,
+    limit: int,
+) -> list[tuple[str, ThreadConcept]]:
+    """Croisement déterministe groupe × concept (T15bis) — exclut les paires déjà présentes en
+    backlog. Exclusion dure et définitive (pas une fenêtre glissante) : un couple groupe/concept
+    curé est fini et identifiable exactement, contrairement à l'ancienne idéation libre où deux
+    sujets reformulés différemment pouvaient être des quasi-doublons indétectables (voir
+    `storage.used_group_concept_pairs`).
+
+    Parcourt les concepts en boucle externe (groupes en interne) — vérifié en conditions
+    réelles : avec l'ordre inverse, un lot de 12 s'épuisait entièrement sur un seul groupe
+    (BTS, premier de `artist_tiers.yaml`) avant de considérer les autres. Ainsi, un même lot
+    couvre plusieurs groupes différents dès la première paire."""
+    candidates: list[tuple[str, ThreadConcept]] = []
+    for concept in concepts:
+        for group in groups:
+            if (group, concept.id) in used_pairs:
+                continue
+            candidates.append((group, concept))
+            if len(candidates) >= limit:
+                return candidates
+    return candidates
+
+
 def run_thread_replenish(settings: Settings, *, dry_run: bool = False) -> int:
-    """Génère un nouveau lot de Topics si le backlog descend sous le seuil configuré. Un seul
-    appel Gemini d'idéation (même principe de coût maîtrisé que le digest hebdomadaire T12) —
-    retourne le nombre de topics insérés (0 si le backlog était déjà suffisant)."""
+    """Génère un nouveau lot de Topics si le backlog descend sous le seuil configuré (T15bis) —
+    croisement déterministe groupe × concept en code (`_candidate_pairs`), un seul appel Gemini
+    pour rédiger le titre/premise de chaque paire déjà choisie — jamais pour choisir la paire
+    elle-même (voir TODO.md T15bis). Retourne le nombre de topics insérés (0 si le backlog était
+    déjà suffisant, ou si aucune paire groupe/concept n'est plus disponible)."""
     conn = storage.init_db(settings.db_path)
     try:
         count = storage.backlog_topic_count(conn)
@@ -45,21 +87,50 @@ def run_thread_replenish(settings: Settings, *, dry_run: bool = False) -> int:
             logger.info("Backlog de Topics suffisant (%d) — aucun réapprovisionnement.", count)
             return 0
 
-        if dry_run:
-            logger.info(
-                "[dry-run] réapprovisionnerait le backlog (%d/%d actuellement) — aucun appel "
-                "Gemini, aucune écriture en base.",
-                count,
-                settings.thread_topic_backlog_min,
+        groups = _load_viral_groups(settings)
+        concepts = analyzer.load_thread_concepts(settings.thread_concepts_path)
+        used_pairs = storage.used_group_concept_pairs(conn)
+        candidate_pairs = _candidate_pairs(
+            groups, concepts, used_pairs, limit=settings.thread_ideation_batch_size
+        )
+        if not candidate_pairs:
+            logger.warning(
+                "Plus aucune paire groupe/concept disponible — enrichis "
+                "config/thread_concepts.yaml ou config/artist_tiers.yaml."
             )
             return 0
 
-        excluded_pairs = storage.recent_group_theme_pairs(conn)
+        if dry_run:
+            for group, concept in candidate_pairs:
+                logger.info("[dry-run] proposerait la paire : %s / %s", group, concept.label)
+            return 0
+
         gemini = _gemini(settings)
-        result, tokens_in, tokens_out = gemini.ideate_thread_topics(
-            batch_size=settings.thread_ideation_batch_size, excluded_pairs=excluded_pairs
-        )
-        ids = storage.insert_topic_ideas(conn, result.topics)
+        result, tokens_in, tokens_out = gemini.ideate_thread_topics(candidate_pairs=candidate_pairs)
+
+        expected_indices = set(range(len(candidate_pairs)))
+        received_indices = {item.pair_index for item in result.topics}
+        if received_indices != expected_indices:
+            logger.warning(
+                "Réponse Gemini incohérente pour l'idéation (pair_index attendus %s, reçus "
+                "%s) — lot ignoré, réessai au prochain cycle.",
+                sorted(expected_indices),
+                sorted(received_indices),
+            )
+            return 0
+
+        writing_by_index = {item.pair_index: item for item in result.topics}
+        ideas = [
+            ThreadTopicIdea(
+                group_name=group,
+                theme=concept.theme,
+                title=writing_by_index[index].title,
+                premise=writing_by_index[index].premise,
+                concept_id=concept.id,
+            )
+            for index, (group, concept) in enumerate(candidate_pairs)
+        ]
+        ids = storage.insert_topic_ideas(conn, ideas)
         logger.info(
             "Réapprovisionnement : %d nouveaux topics insérés (tokens_in=%d, tokens_out=%d).",
             len(ids),

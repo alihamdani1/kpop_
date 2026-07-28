@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     thread_topic_backlog_min: int = 15
     # Taille du lot généré par appel d'idéation quand le backlog descend sous le seuil.
     thread_ideation_batch_size: int = 12
+    # Concepts viraux curés (T15bis, idéation hybride) — croisés en code avec les groupes de
+    # artist_tiers_path pour former les Topics candidats, voir thread_pipeline._candidate_pairs.
+    thread_concepts_path: Path = Path("config/thread_concepts.yaml")
     # Délai avant qu'une sélection PENDING (personne n'a réagi) soit marquée EXPIRED.
     thread_selection_ttl_hours: float = 24.0
 

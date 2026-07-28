@@ -253,11 +253,27 @@ class ThreadStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class ThreadConcept(BaseModel):
+    """Un concept viral curé (`config/thread_concepts.yaml`, T15bis) — matière première fixe,
+    jamais inventée par l'IA. Croisé en code avec un groupe (`config/artist_tiers.yaml`) pour
+    former un Topic candidat ; l'IA ne rédige ensuite qu'un titre/premise sur-mesure pour la
+    paire déjà choisie (voir `ThreadTopicWriting`, `thread_pipeline._candidate_pairs`)."""
+
+    id: str
+    theme: ThreadTheme
+    label: str
+    brief: str = Field(
+        description="Matière première générale du concept, injectée dans le prompt de rédaction."
+    )
+
+
 class ThreadTopicIdea(BaseModel):
-    """Un sujet de thread proposé par l'IA (T15) — génération libre, volontairement PAS ancrée
-    sur un article déjà collecté par le pipeline existant (décision actée : variété éditoriale
-    priorisée sur la garantie factuelle stricte). Conséquence assumée : aucun filet déterministe
-    n'est possible ici, contrairement au filet France/record — voir TODO.md T15."""
+    """Un sujet de thread prêt à être inséré en base (T15) — `group_name`/`theme`/`concept_id`
+    sont fixés en code (croisement déterministe, voir `thread_pipeline._candidate_pairs`),
+    `title`/`premise` sont rédigés par l'IA à partir du `brief` du concept (voir
+    `ThreadTopicWriting`). Contrairement à la version initiale de T15, l'IA ne choisit plus ni le
+    groupe ni le thème — seule la rédaction du titre/premise lui revient, ce qui élimine le
+    risque d'un sujet halluciné ou hors-sol (voir TODO.md T15bis)."""
 
     group_name: str = Field(
         description="Groupe/artiste concerné, ou portée générale (ex. 'industrie K-pop') si le "
@@ -269,14 +285,33 @@ class ThreadTopicIdea(BaseModel):
         description="La promesse/l'angle de fond du sujet en 1-2 phrases — ce que le thread "
         "devra développer, quel que soit l'angle narratif choisi ensuite."
     )
+    concept_id: str | None = Field(
+        default=None,
+        description="Id du concept curé à l'origine de ce topic (voir ThreadConcept). None pour "
+        "les topics historiques générés par l'ancienne idéation libre, avant T15bis.",
+    )
+
+
+class ThreadTopicWriting(BaseModel):
+    """Sortie du 1er appel IA de T15bis (idéation) pour UNE paire (groupe, concept) déjà choisie
+    par le code — l'IA ne renvoie jamais le groupe ni le concept eux-mêmes, uniquement le
+    contenu rédactionnel, référencé par `pair_index` pour un rattachement sûr côté code (voir
+    `thread_pipeline.run_thread_replenish`, qui valide que les index reçus correspondent
+    exactement aux paires soumises avant tout usage)."""
+
+    pair_index: int = Field(description="Position (0-indexée) de la paire dans la liste soumise.")
+    title: str = Field(
+        description="Titre court, spécifique au groupe cité — pas un texte générique."
+    )
+    premise: str = Field(description="Promesse de fond en 1-2 phrases, spécifique à ce groupe.")
 
 
 class TopicIdeationResult(BaseModel):
-    """Sortie de l'appel d'idéation (T15) — un lot de sujets en un seul appel Gemini, pour
+    """Sortie de l'appel d'idéation (T15bis) — un lot de rédactions en un seul appel Gemini, pour
     réapprovisionner le backlog par lot plutôt qu'un appel par sujet (même principe de coût
     maîtrisé que le digest hebdomadaire T12)."""
 
-    topics: list[ThreadTopicIdea]
+    topics: list[ThreadTopicWriting]
 
 
 class ThreadWritingResult(BaseModel):
@@ -315,6 +350,7 @@ class ThreadTopicRecord(BaseModel):
     created_at: dt.datetime
     last_offered_at: dt.datetime | None = None
     source: str
+    concept_id: str | None = None
 
 
 class ThreadSelectionRecord(BaseModel):
