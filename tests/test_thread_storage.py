@@ -273,6 +273,77 @@ def test_select_picker_candidates_exclut_les_couples_recents(conn):
     assert ("Groupe A", "ANALYSE_COMEBACK") not in pairs
 
 
+def test_select_picker_candidates_un_seul_topic_par_theme_meme_avec_des_groupes_differents(conn):
+    """T15quater : régression du lot réel observé 100% RIVALITE_COMPARAISON — l'ancienne
+    diversification n'excluait que le couple (groupe, thème) identique, donc 3 groupes
+    différents partageant le même thème passaient tous. Le picker ne doit plus jamais proposer
+    2 fois le même thème le même jour, même avec des groupes distincts."""
+    storage.insert_topic_ideas(
+        conn,
+        [
+            _idea(group_name="Groupe A", theme=ThreadTheme.RIVALITE_COMPARAISON, title="Sujet 1"),
+            _idea(group_name="Groupe B", theme=ThreadTheme.RIVALITE_COMPARAISON, title="Sujet 2"),
+            _idea(group_name="Groupe C", theme=ThreadTheme.RIVALITE_COMPARAISON, title="Sujet 3"),
+            _idea(group_name="Groupe D", theme=ThreadTheme.CULTURE_FANS, title="Sujet 4"),
+        ],
+    )
+    candidates = storage.select_picker_candidates(conn, count=3)
+    themes = [topic.theme.value for topic, _ in candidates]
+    assert themes.count("RIVALITE_COMPARAISON") == 1
+    assert len(candidates) == 2  # un seul thème RIVALITE_COMPARAISON dispo malgré 3 groupes
+
+
+def test_angle_usage_counts_toutes_les_valeurs_presentes_meme_a_zero(conn):
+    counts = storage.angle_usage_counts(conn)
+    assert counts == {angle.value: 0 for angle in ThreadAngle}
+
+
+def test_angle_usage_counts_reflete_les_threads_generes(conn):
+    [topic_id] = storage.insert_topic_ideas(conn, [_idea()])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}" for i in range(6)])
+    storage.insert_thread(
+        conn,
+        selection_id=None,
+        topic_id=topic_id,
+        angle=ThreadAngle.CONTRARIEN,
+        hook_label="chiffre_marquant",
+        writing=writing,
+        tokens_in=1,
+        tokens_out=1,
+        prompt_version="v1",
+    )
+    counts = storage.angle_usage_counts(conn)
+    assert counts["CONTRARIEN"] == 1
+    assert counts["STORYTELLING"] == 0
+
+
+def test_select_picker_candidates_choisit_l_angle_le_moins_utilise(conn):
+    """Corrige le biais observé en conditions réelles : CONTRARIEN était toujours choisi (premier
+    de l'enum) pour tout topic neuf. Un topic neuf doit maintenant recevoir l'angle le moins
+    utilisé globalement, pas systématiquement CONTRARIEN."""
+    # Consomme CONTRARIEN plusieurs fois sur d'autres topics pour le rendre "sur-utilisé".
+    [used_topic_id] = storage.insert_topic_ideas(conn, [_idea(group_name="Groupe Z")])
+    writing = ThreadWritingResult(premise_respectee=True, tweets=[f"Tweet {i}" for i in range(6)])
+    storage.insert_thread(
+        conn,
+        selection_id=None,
+        topic_id=used_topic_id,
+        angle=ThreadAngle.CONTRARIEN,
+        hook_label="chiffre_marquant",
+        writing=writing,
+        tokens_in=1,
+        tokens_out=1,
+        prompt_version="v1",
+    )
+
+    [fresh_topic_id] = storage.insert_topic_ideas(
+        conn, [_idea(group_name="Groupe Neuf", theme=ThreadTheme.CULTURE_FANS)]
+    )
+    candidates = storage.select_picker_candidates(conn, count=2)
+    [(topic, angle)] = [c for c in candidates if c[0].id == fresh_topic_id]
+    assert angle != ThreadAngle.CONTRARIEN
+
+
 def test_touch_offered_topics_met_a_jour_last_offered_at(conn):
     [topic_id] = storage.insert_topic_ideas(conn, [_idea()])
     assert storage.get_topic(conn, topic_id).last_offered_at is None

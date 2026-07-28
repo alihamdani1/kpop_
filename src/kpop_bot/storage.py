@@ -431,19 +431,36 @@ def recent_hook_labels(conn: sqlite3.Connection, *, limit: int = 5) -> list[str]
     return [row["hook_label"] for row in rows]
 
 
+def angle_usage_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Nombre d'utilisations de chaque angle, tous topics confondus (T15quater) — sert à choisir
+    l'angle le moins utilisé globalement plutôt que toujours le premier disponible, qui tombait
+    systématiquement sur CONTRARIEN (premier de l'enum) pour tout topic neuf. Toutes les valeurs
+    de `ThreadAngle` sont présentes, à 0 si jamais utilisées, pour un tri déterministe."""
+    counts = {angle.value: 0 for angle in _ALL_THREAD_ANGLES}
+    for row in conn.execute("SELECT angle, COUNT(*) AS n FROM threads GROUP BY angle"):
+        counts[row["angle"]] = row["n"]
+    return counts
+
+
 def select_picker_candidates(
     conn: sqlite3.Connection, *, count: int = 3, recent_window_days: int = 14
 ) -> list[tuple[ThreadTopicRecord, ThreadAngle]]:
     """Choisit `count` couples (topic, angle) jamais consommés ensemble, diversifiés par
-    (group_name, theme) sur la fenêtre récente. Priorité aux topics les moins récemment proposés
-    (`last_offered_at` NULL ou ancien d'abord — NULL trie en premier en ASC sous SQLite)."""
+    (group_name, theme) sur la fenêtre récente, et par thème seul au sein du lot du jour
+    (T15quater — les 3 options proposées ne peuvent jamais partager le même thème, même avec
+    des groupes différents). Priorité aux topics les moins récemment proposés (`last_offered_at`
+    NULL ou ancien d'abord — NULL trie en premier en ASC sous SQLite). L'angle retenu pour
+    chaque topic est le moins utilisé globalement parmi ceux encore disponibles (égalité
+    tranchée par l'ordre de l'enum, pour rester déterministe) — voir `angle_usage_counts`."""
     excluded_pairs = recent_group_theme_pairs(conn, days=recent_window_days)
+    usage = angle_usage_counts(conn)
     rows = conn.execute(
         "SELECT * FROM thread_topics ORDER BY last_offered_at ASC, created_at ASC"
     ).fetchall()
 
     picked: list[tuple[ThreadTopicRecord, ThreadAngle]] = []
     used_pairs_this_batch: set[tuple[str, str]] = set()
+    used_themes_this_batch: set[str] = set()
     for row in rows:
         if len(picked) >= count:
             break
@@ -451,11 +468,15 @@ def select_picker_candidates(
         pair = (topic.group_name, topic.theme.value)
         if pair in excluded_pairs or pair in used_pairs_this_batch:
             continue
+        if topic.theme.value in used_themes_this_batch:
+            continue
         angles = available_angles(conn, topic.id)
         if not angles:
             continue
-        picked.append((topic, angles[0]))
+        chosen_angle = min(angles, key=lambda a: (usage[a.value], _ALL_THREAD_ANGLES.index(a)))
+        picked.append((topic, chosen_angle))
         used_pairs_this_batch.add(pair)
+        used_themes_this_batch.add(topic.theme.value)
     return picked
 
 

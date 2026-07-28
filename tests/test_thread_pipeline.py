@@ -146,20 +146,20 @@ def test_run_thread_replenish_genere_un_lot_si_backlog_bas(settings, monkeypatch
     settings = settings.model_copy(
         update={
             "thread_topic_backlog_min": 5,
-            "thread_ideation_batch_size": 4,
+            "thread_ideation_batch_size": 2,
             "artist_tiers_path": tiers_path,
             "thread_concepts_path": concepts_path,
         }
     )
     _seed_topics(settings, n=1)  # topic historique (concept_id=None) — n'entrave pas le croisement
 
-    # Croisement attendu (concept-outer, groupe-inner — voir _candidate_pairs) :
-    # 0=(Groupe A, concept_1), 1=(Groupe B, concept_1), 2=(Groupe A, concept_2),
-    # 3=(Groupe B, concept_2).
+    # Lot de 2, cap par thème = max(1, round(2*0.25)) = 1 — les 2 concepts (thèmes différents,
+    # poids égal) obtiennent chacun 1 place dès la passe normale, sans passe assouplie.
+    # 0=(Groupe A, concept_1), 1=(Groupe A, concept_2) — voir _candidate_pairs.
     writing_result = TopicIdeationResult(
         topics=[
             ThreadTopicWriting(pair_index=i, title=f"Titre {i}", premise=f"Promesse {i}.")
-            for i in range(4)
+            for i in range(2)
         ]
     )
     captured: dict = {}
@@ -170,32 +170,67 @@ def test_run_thread_replenish_genere_un_lot_si_backlog_bas(settings, monkeypatch
 
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "ideate_thread_topics", _fake_ideate)
     inserted = run_thread_replenish(settings)
-    assert inserted == 4
+    assert inserted == 2
 
-    assert [group for group, _ in captured["pairs"]] == [
-        "Groupe A",
-        "Groupe B",
-        "Groupe A",
-        "Groupe B",
-    ]
-    assert [concept.id for _, concept in captured["pairs"]] == [
-        "concept_1",
-        "concept_1",
-        "concept_2",
-        "concept_2",
-    ]
+    assert [group for group, _ in captured["pairs"]] == ["Groupe A", "Groupe A"]
+    assert [concept.id for _, concept in captured["pairs"]] == ["concept_1", "concept_2"]
 
     conn = storage.init_db(settings.db_path)
-    assert storage.backlog_topic_count(conn) == 5  # 1 historique + 4 nouveaux
+    assert storage.backlog_topic_count(conn) == 3  # 1 historique + 2 nouveaux
     rows = {
         row["title"]: row["concept_id"]
         for row in conn.execute("SELECT title, concept_id FROM thread_topics")
     }
     assert rows["Titre 0"] == "concept_1"
-    assert rows["Titre 1"] == "concept_1"
-    assert rows["Titre 2"] == "concept_2"
-    assert rows["Titre 3"] == "concept_2"
+    assert rows["Titre 1"] == "concept_2"
     conn.close()
+
+
+# --- T15quater : rotation pondérée + plafond par thème (fonctions pures, aucun réseau/base) ---
+
+
+def test_candidate_pairs_priorise_poids_fort_meme_partageant_un_theme():
+    """Régression : sans tri par poids, un concept `weight=2.0` listé APRÈS un concept
+    `weight=1.0` du même thème dans la config perdait systématiquement le plafond du thème face
+    à lui (biais d'ordre de fichier, pas de poids réel) — observé en cherchant à reproduire le
+    lot 100% RIVALITE_COMPARAISON vu en conditions réelles."""
+    concepts = [
+        ThreadConcept(id="normal", theme=ThreadTheme.RECORD_ANECDOTE, label="Normal", brief="B"),
+        ThreadConcept(
+            id="fort", theme=ThreadTheme.RECORD_ANECDOTE, label="Fort", brief="B", weight=2.0
+        ),
+    ]
+    groups = ["Groupe A", "Groupe B", "Groupe C"]
+    pairs = _candidate_pairs(groups, concepts, set(), limit=3)  # cap = round(3*0.25) = 1
+    assert pairs[0][1].id == "fort"
+
+
+def test_candidate_pairs_respecte_le_plafond_par_theme_en_passe_normale():
+    """Aucun thème ne dépasse ~25% du lot tant que d'autres thèmes ont de la place — corrige le
+    lot réel observé 100% RIVALITE_COMPARAISON."""
+    concepts = [
+        ThreadConcept(id="c1", theme=ThreadTheme.RECORD_ANECDOTE, label="C1", brief="B"),
+        ThreadConcept(id="c2", theme=ThreadTheme.CULTURE_FANS, label="C2", brief="B"),
+        ThreadConcept(id="c3", theme=ThreadTheme.MYTHE_VS_REALITE, label="C3", brief="B"),
+        ThreadConcept(id="c4", theme=ThreadTheme.CONNEXION_FRANCE, label="C4", brief="B"),
+    ]
+    groups = [f"Groupe {i}" for i in range(10)]
+    pairs = _candidate_pairs(groups, concepts, set(), limit=8)  # cap = round(8*0.25) = 2
+    theme_counts: dict[str, int] = {}
+    for _, concept in pairs:
+        theme_counts[concept.theme.value] = theme_counts.get(concept.theme.value, 0) + 1
+    assert all(n <= 2 for n in theme_counts.values())
+    assert len(pairs) == 8
+
+
+def test_candidate_pairs_passe_assouplie_complete_le_lot_si_plafond_bloque():
+    """Si le plafond par thème empêche de remplir le lot faute d'alternative (un seul thème
+    disponible), une passe assouplie complète sans plafond plutôt que de laisser un lot
+    anormalement court."""
+    concepts = [ThreadConcept(id="c1", theme=ThreadTheme.RECORD_ANECDOTE, label="C1", brief="B")]
+    groups = ["Groupe A", "Groupe B", "Groupe C", "Groupe D"]
+    pairs = _candidate_pairs(groups, concepts, set(), limit=4)  # cap = round(4*0.25) = 1
+    assert len(pairs) == 4  # dépasse le plafond théorique (1), faute d'alternative
 
 
 def test_run_thread_replenish_ignore_le_lot_si_pair_index_incoherents(

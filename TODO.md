@@ -785,6 +785,71 @@ propre) — **pas encore observé en conditions réelles** : reste un vrai `thre
 juger qualitativement le style obtenu (langage anti-IA, rythme, hook+frame) et confirmer que le
 nouveau modèle (`gemini-3.5-flash` et non plus `-lite`) répond correctement au schéma resserré.
 
+### ✅ T15quater — Couverture éditoriale (piliers) + équilibrage groupe/thème/angle — FAIT
+
+**Origine** : premier lot réel d'idéation hybride (T15bis) observé en conditions réelles —
+12/12 sujets générés sur le même concept (`rivalite_generationnelle`, thème
+RIVALITE_COMPARAISON), et les 2 threads déjà générés utilisent tous les deux l'angle
+CONTRARIEN. Deux angles morts (déséquilibre de contenu + déséquilibre d'angle), tous les deux
+mécaniques (ordre de parcours / premier élément d'une liste), donc corrigeables en code sans
+attendre un plus grand volume de données pour juger.
+
+**Décisions** :
+
+1. **8 piliers éditoriaux → 12 nouveaux concepts curés** dans `config/thread_concepts.yaml`
+   (Tops & Data, Dramas & Affaires, Storytelling & Histoires, Coulisses & Métier, Lore &
+   Théories, Artistes Sous-estimés, Impact France & Mode, Métamorphoses) — chacun rattaché à un
+   `theme` déjà existant, aucun nouvel enum nécessaire. « Pilier » n'est pas encodé comme entité
+   séparée : un simple champ `weight` (défaut `1.0`) sur `ThreadConcept` suffit à distinguer les
+   concepts à privilégier (Tops/Dramas/Storytelling, `weight=2.0`) des autres.
+2. **Quota déterministe (pas de hasard) + plafond par thème** dans `_candidate_pairs`
+   (`thread_pipeline.py`) :
+   - Rotation pondérée entre concepts (un concept `weight=2.0` repasse deux fois plus souvent
+     qu'un concept `weight=1.0` dans l'ordre de tirage) — approxime le "~60 % Tops/Dramas/
+     Storytelling" demandé sans réintroduire de tirage aléatoire (principe fondateur de T15bis :
+     croisement 100 % déterministe).
+   - Plafond `~25 % du lot par thème` (`round(limit * 0.25)`, minimum 1) — empêche qu'un thème
+     unique (comme RIVALITE_COMPARAISON) monopolise un lot entier. Si le plafond empêche de
+     remplir le lot (plus assez d'alternatives), une passe assouplie complète sans plafond
+     plutôt que de laisser un lot anormalement court — mieux vaut un lot un peu déséquilibré
+     qu'un lot incomplet.
+3. **Angle le moins utilisé globalement, pas le premier disponible** — nouvelle fonction
+   `storage.angle_usage_counts()` (compte les angles déjà utilisés dans `threads`, tous topics
+   confondus) ; `select_picker_candidates()` choisit désormais, parmi les angles encore
+   disponibles pour un topic donné, celui le **moins utilisé globalement** (égalité tranchée par
+   l'ordre de l'enum, pour rester déterministe) — plutôt que `angles[0]`, qui tombait
+   systématiquement sur CONTRARIEN pour tout topic neuf. Corrige un vrai biais observé (2/2
+   threads générés jusqu'ici sont CONTRARIEN), s'auto-corrige dans le temps sans tirage aléatoire.
+4. **3 thèmes strictement différents dans le picker quotidien** — `select_picker_candidates()`
+   ajoute une contrainte de diversité au niveau du **thème seul** (en plus de la diversité
+   existante par couple (groupe, thème)) : les 3 options proposées un même jour ne peuvent plus
+   partager le même thème. Complémentaire du point 2, pas redondant : le point 2 empêche un
+   **futur** lot de se déséquilibrer, cette règle protège immédiatement le picker même sur un
+   backlog **déjà** déséquilibré (13/24 topics actuels en RIVALITE_COMPARAISON).
+
+**Fichiers concernés** : `config/thread_concepts.yaml` (12 nouveaux concepts + `weight` sur les
+6 prioritaires), `models.py` (`ThreadConcept.weight`), `thread_pipeline.py` (`_candidate_pairs`
+réécrit), `storage.py` (`angle_usage_counts()`, `select_picker_candidates()` mis à jour), tests
+associés (`test_thread_models.py`, `test_thread_pipeline.py`, `test_thread_storage.py`).
+
+**Fait quand** : tests sur le quota pondéré (un concept `weight=2.0` apparaît environ deux fois
+plus souvent), sur le plafond par thème (jamais dépassé, sauf passe assouplie si nécessaire pour
+remplir le lot), sur la sélection de l'angle le moins utilisé (et son égalité déterministe), sur
+la diversité de thème dans `select_picker_candidates` (jamais 2 topics du même thème proposés le
+même jour) — 180 tests au vert, `ruff` propre.
+
+**Bug trouvé et corrigé pendant l'implémentation** : sans tri préalable par poids, un concept
+`weight=2.0` partageant un thème avec un concept `weight=1.0` plus ancien dans
+`config/thread_concepts.yaml` perdait systématiquement le plafond du thème face à lui (l'ordre
+de tirage suivait l'ordre du fichier, pas le poids réel) — les nouveaux piliers auraient été
+étouffés par les concepts déjà présents. Corrigé en triant les concepts par poids décroissant
+avant de construire la rotation (voir `_candidate_pairs`).
+
+**Vérifié avec la vraie config du projet** (`thread-replenish --dry-run`, 30 concepts réels) :
+le lot de 12 couvre maintenant 8 concepts distincts sur 5 thèmes différents (chacun plafonné à
+3), dominé par les piliers à poids fort comme prévu — contre 12/12 sur un seul concept avant ce
+correctif.
+
 ---
 
 ## Ordre d'exécution — où on en est
@@ -795,10 +860,10 @@ nouveau modèle (`gemini-3.5-flash` et non plus `-lite`) répond correctement au
                                                                       on est ici — objectif initial atteint
        └──────────────── socle + métier : fait ────────────────┘   (T4bis / T5bis toujours reportées)
 
-✅T15 → ✅T15bis → ✅T15ter (threads Twitter quotidiens + idéation hybride + style de
-   rédaction) — indépendant du reste (nouveau pipeline parallèle, nouveaux crons dédiés).
-   T15/T15bis validés en conditions réelles ; T15ter testé (mocks) mais pas encore observé en
-   conditions réelles.
+✅T15 → ✅T15bis → ✅T15ter → ✅T15quater (threads Twitter quotidiens + idéation hybride + style
+   de rédaction + équilibrage piliers/thème/angle) — indépendant du reste (nouveau pipeline
+   parallèle, nouveaux crons dédiés). T15/T15bis validés en conditions réelles ; T15ter/T15quater
+   testés (mocks + config réelle en dry-run) mais pas encore observés sur un vrai cycle complet.
 ```
 
 **Restant concrètement** :
@@ -818,10 +883,11 @@ nouveau modèle (`gemini-3.5-flash` et non plus `-lite`) répond correctement au
   (`.env` local déjà à jour).
 - **T15 / T15bis** — threads Twitter quotidiens + idéation hybride, fait et validé en conditions
   réelles (Bot Discord créé, secrets GitHub Actions en place, cycle complet observé). **T15ter**
-  (style de rédaction + modèle dédié) codé et testé, reste à observer un vrai `thread-resolve`
-  pour juger qualitativement le résultat. Reste un ajustement possible : enrichir
-  `config/thread_concepts.yaml` au fil du temps si le backlog se
-  vide plus vite que prévu.
+  (style de rédaction + modèle dédié) et **T15quater** (piliers éditoriaux + équilibrage
+  groupe/thème/angle) codés et testés — reste à observer un vrai cycle complet
+  (`thread-replenish` → `thread-select` → `thread-resolve`) pour juger qualitativement le
+  résultat sur un lot réellement diversifié. Reste un ajustement possible : enrichir encore
+  `config/thread_concepts.yaml` au fil du temps si le backlog se vide plus vite que prévu.
 
 ---
 

@@ -50,6 +50,9 @@ def _load_viral_groups(settings: Settings) -> list[str]:
     return groups
 
 
+_THEME_CAP_RATIO = 0.25  # part maximale d'un même thème dans un lot (T15quater)
+
+
 def _candidate_pairs(
     groups: list[str],
     concepts: list[ThreadConcept],
@@ -57,25 +60,90 @@ def _candidate_pairs(
     *,
     limit: int,
 ) -> list[tuple[str, ThreadConcept]]:
-    """Croisement déterministe groupe × concept (T15bis) — exclut les paires déjà présentes en
-    backlog. Exclusion dure et définitive (pas une fenêtre glissante) : un couple groupe/concept
-    curé est fini et identifiable exactement, contrairement à l'ancienne idéation libre où deux
-    sujets reformulés différemment pouvaient être des quasi-doublons indétectables (voir
-    `storage.used_group_concept_pairs`).
+    """Croisement déterministe groupe × concept (T15bis/T15quater) — exclut les paires déjà
+    présentes en backlog. Exclusion dure et définitive (pas une fenêtre glissante) : un couple
+    groupe/concept curé est fini et identifiable exactement, contrairement à l'ancienne idéation
+    libre où deux sujets reformulés différemment pouvaient être des quasi-doublons indétectables
+    (voir `storage.used_group_concept_pairs`).
 
-    Parcourt les concepts en boucle externe (groupes en interne) — vérifié en conditions
-    réelles : avec l'ordre inverse, un lot de 12 s'épuisait entièrement sur un seul groupe
-    (BTS, premier de `artist_tiers.yaml`) avant de considérer les autres. Ainsi, un même lot
-    couvre plusieurs groupes différents dès la première paire."""
+    Deux garde-fous ajoutés en T15quater, suite à un premier lot réel 100 % concentré sur un
+    seul concept :
+    - **Rotation pondérée** : un concept `weight=2.0` (voir `config/thread_concepts.yaml`, ex.
+      piliers Tops/Dramas/Storytelling) repasse deux fois plus souvent qu'un concept
+      `weight=1.0` dans l'ordre de tirage — approxime une priorité éditoriale sans tirage
+      aléatoire (le croisement reste 100 % déterministe, principe fondateur de T15bis). Les
+      concepts sont d'abord triés par poids décroissant (tri stable) avant de construire la
+      rotation : sinon, deux concepts qui partagent un même thème (ex. `top_ventes_streams` et
+      `record_marquant`, tous deux RECORD_ANECDOTE) verraient le plafond du thème arbitré par
+      leur position dans `config/thread_concepts.yaml` plutôt que par leur poids réel — un
+      concept à poids fort ajouté en fin de fichier perdrait systématiquement face à un concept
+      à poids normal déjà présent plus tôt dans la liste.
+    - **Plafond par thème** (~25 % du lot) : empêche qu'un thème unique monopolise un lot
+      entier. Si le plafond empêche de remplir le lot faute d'alternative, une passe assouplie
+      complète sans plafond plutôt que de laisser un lot anormalement court — mieux vaut un lot
+      un peu déséquilibré qu'un lot incomplet."""
+    if not groups or not concepts:
+        return []
+
+    theme_cap = max(1, round(limit * _THEME_CAP_RATIO))
+    # Poids décroissant d'abord (tri stable — égalité de poids préserve l'ordre du fichier).
+    ordered_concepts = sorted(concepts, key=lambda c: c.weight, reverse=True)
+    # Chaque concept apparaît dans la rotation un nombre de fois proportionnel à son poids.
+    rotation: list[ThreadConcept] = []
+    for concept in ordered_concepts:
+        rotation.extend([concept] * max(1, round(concept.weight)))
+
+    group_cursor: dict[str, int] = dict.fromkeys((c.id for c in concepts), 0)
+
+    def _next_group(concept: ThreadConcept) -> str | None:
+        cursor = group_cursor[concept.id]
+        while cursor < len(groups):
+            group = groups[cursor]
+            cursor += 1
+            group_cursor[concept.id] = cursor
+            if (group, concept.id) not in used_pairs:
+                return group
+        group_cursor[concept.id] = cursor
+        return None
+
     candidates: list[tuple[str, ThreadConcept]] = []
-    for concept in concepts:
-        for group in groups:
-            if (group, concept.id) in used_pairs:
-                continue
-            candidates.append((group, concept))
-            if len(candidates) >= limit:
-                return candidates
-    return candidates
+    theme_counts: dict[str, int] = {}
+    exhausted: set[str] = set()
+    stalled_rounds = 0
+    round_index = 0
+    while (
+        len(candidates) < limit
+        and len(exhausted) < len(ordered_concepts)
+        and stalled_rounds <= len(rotation)
+    ):
+        concept = rotation[round_index % len(rotation)]
+        round_index += 1
+        if concept.id in exhausted or theme_counts.get(concept.theme.value, 0) >= theme_cap:
+            stalled_rounds += 1
+            continue
+        group = _next_group(concept)
+        if group is None:
+            exhausted.add(concept.id)
+            stalled_rounds += 1
+            continue
+        candidates.append((group, concept))
+        theme_counts[concept.theme.value] = theme_counts.get(concept.theme.value, 0) + 1
+        stalled_rounds = 0
+
+    # Passe assouplie : le plafond par thème a pu empêcher de remplir le lot — complète sans
+    # plafond plutôt que de laisser un lot anormalement court.
+    if len(candidates) < limit:
+        chosen = {(group, concept.id) for group, concept in candidates}
+        for concept in ordered_concepts:
+            while len(candidates) < limit:
+                group = _next_group(concept)
+                if group is None:
+                    break
+                if (group, concept.id) not in chosen:
+                    candidates.append((group, concept))
+                    chosen.add((group, concept.id))
+
+    return candidates[:limit]
 
 
 def run_thread_replenish(settings: Settings, *, dry_run: bool = False) -> int:

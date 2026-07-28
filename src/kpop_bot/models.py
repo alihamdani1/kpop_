@@ -265,6 +265,13 @@ class ThreadConcept(BaseModel):
     brief: str = Field(
         description="Matière première générale du concept, injectée dans le prompt de rédaction."
     )
+    weight: float = Field(
+        default=1.0,
+        description="Poids de priorité (T15quater) — un concept à poids 2.0 repasse deux fois "
+        "plus souvent qu'un concept à poids 1.0 dans la rotation déterministe de "
+        "`thread_pipeline._candidate_pairs`. Défaut 1.0 pour la rétrocompatibilité avec les "
+        "concepts existants qui ne précisent pas ce champ.",
+    )
 
 
 class ThreadTopicIdea(BaseModel):

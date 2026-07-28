@@ -129,3 +129,98 @@ concepts:
     brief: >
       Présente une théorie ou interprétation populaire chez les fans autour d'une œuvre ou d'un
       élément connu du groupe.
+
+  # --- 8 piliers éditoriaux (T15quater) — les 6 concepts ci-dessous (Tops & Data, Dramas &
+  # Affaires, Storytelling & Histoires) portent un poids renforcé (weight: 2.0) : ils repassent
+  # deux fois plus souvent que les concepts à poids par défaut (1.0) dans la rotation
+  # déterministe de thread_pipeline._candidate_pairs — voir TODO.md T15quater.
+
+  - id: top_ventes_streams
+    theme: RECORD_ANECDOTE
+    label: "Top ventes/streams"
+    weight: 2.0
+    brief: >
+      Classe ou met en perspective les plus gros chiffres de vente ou de streaming du groupe,
+      avec des repères concrets pour juger de leur ampleur réelle.
+
+  - id: top_artistes_popularite
+    theme: RECORD_ANECDOTE
+    label: "Top popularité artiste"
+    weight: 2.0
+    brief: >
+      Situe la popularité d'un membre ou du groupe par rapport à des repères connus et
+      vérifiables (récompenses, classements, présence internationale).
+
+  - id: recap_drama_groupe
+    theme: RECAP_SCANDALE
+    label: "Récap drama du groupe"
+    weight: 2.0
+    brief: >
+      Reconstitue chronologiquement un drama ou une polémique déjà publique concernant le
+      groupe, avec le recul nécessaire — jamais pour relancer la polémique elle-même.
+
+  - id: affaire_industrie
+    theme: COULISSES_INDUSTRIE
+    label: "Affaire de l'industrie"
+    weight: 2.0
+    brief: >
+      Explique une affaire connue (litige contractuel, procès, conflit avec une agence) qui a
+      marqué l'industrie K-pop, avec ses conséquences concrètes.
+
+  - id: story_resilience_success
+    theme: RETROSPECTIVE_CARRIERE
+    label: "Histoire de résilience"
+    weight: 2.0
+    brief: >
+      Raconte comment le groupe ou un membre a traversé une période difficile connue avant de
+      rebondir — une histoire de résilience, pas juste une liste de succès.
+
+  - id: coulisses_hit_chanson
+    theme: RETROSPECTIVE_CARRIERE
+    label: "Coulisses d'un hit"
+    weight: 2.0
+    brief: >
+      Retrace la genèse connue d'un titre marquant du groupe (écriture, choix artistique,
+      réception) — l'histoire derrière la chanson, pas juste son succès commercial.
+
+  - id: regles_contrats_idols
+    theme: COULISSES_INDUSTRIE
+    label: "Règles des contrats d'idols"
+    brief: >
+      Explique un aspect connu et vérifiable du fonctionnement des contrats d'idols (durée,
+      clauses, débats publics sur le sujet) sans viser un cas précis non confirmé.
+
+  - id: cout_realite_comeback
+    theme: COULISSES_INDUSTRIE
+    label: "Coût réel d'un comeback"
+    brief: >
+      Détaille ce qu'implique concrètement la production d'un comeback (répétitions, clip,
+      promotion) pour donner une vraie idée de l'ampleur du travail derrière.
+
+  - id: lore_mv_theories
+    theme: MYTHE_VS_REALITE
+    label: "Théories de lore MV"
+    brief: >
+      Présente une théorie ou un fil narratif populaire construit par les fans autour de
+      l'univers visuel des clips du groupe — en le présentant explicitement comme une théorie.
+
+  - id: talent_sous_estime
+    theme: MYTHE_VS_REALITE
+    label: "Talent sous-estimé"
+    brief: >
+      Met en avant une compétence réelle et vérifiable d'un membre trop peu reconnue
+      publiquement (composition, chorégraphie, technique vocale...).
+
+  - id: connexion_france_mode
+    theme: CONNEXION_FRANCE
+    label: "Impact France & Mode"
+    brief: >
+      Explore les liens du groupe avec la France au-delà des concerts : ambassadeurs de mode,
+      collaborations avec des maisons de luxe françaises, apparitions remarquées.
+
+  - id: evolution_physique_statut
+    theme: RETROSPECTIVE_CARRIERE
+    label: "Métamorphose avant/après"
+    brief: >
+      Montre l'évolution du statut et de l'image publique du groupe entre ses débuts et
+      aujourd'hui — la trajectoire, pas un jugement sur l'apparence physique.
