@@ -41,7 +41,18 @@ class AnalysisError(Exception):
 
 
 class QuotaExceededError(AnalysisError):
-    """429 — signal distinct : l'appelant doit arrêter le cycle, pas marquer FAILED en boucle."""
+    """429 (quota) ou 5xx (erreur serveur transitoire — surcharge, indisponibilité momentanée) —
+    signal distinct : déclenche le repli sur le modèle/la clé suivante, et si toute la chaîne est
+    épuisée, l'appelant arrête le cycle plutôt que de marquer FAILED en boucle. Élargi aux 5xx
+    suite à un incident réel (T15ter, 28/07/2026) : un 503 sur le modèle principal remontait
+    directement en `AnalysisError` sans jamais essayer les modèles de secours, alors que c'est
+    exactement le genre de panne transitoire qu'une chaîne de repli est censée absorber."""
+
+
+# Codes HTTP serveur transitoires (surcharge, indisponibilité momentanée, timeout amont) — voir
+# QuotaExceededError. Distinct des erreurs client (400, 404...) qui ne se résoudront jamais en
+# retentant sur un autre modèle/une autre clé.
+_RETRYABLE_SERVER_ERROR_CODES = (500, 502, 503, 504)
 
 
 def load_artist_tiers(path: Path) -> dict[str, list[str]]:
@@ -571,10 +582,11 @@ class GeminiAnalyzer:
     ) -> tuple[_T, int, int]:
         """Essaie chaque modèle de la chaîne (principal puis secours, quota indépendant mais
         même clé API), dans l'ordre, sur la première clé. Uniquement si les trois échouent en
-        429, repart au début de la chaîne de modèles sur la clé API suivante (2e compte Google,
-        quota totalement indépendant — voir T5quinquies). Si la toute dernière combinaison
-        clé/modèle échoue aussi, l'erreur remonte normalement : le filet de sécurité existant
-        (article repris au cycle suivant, voir pipeline.py) reste la dernière protection."""
+        429 ou en erreur serveur transitoire (5xx, voir `QuotaExceededError`), repart au début
+        de la chaîne de modèles sur la clé API suivante (2e compte Google, quota totalement
+        indépendant — voir T5quinquies). Si la toute dernière combinaison clé/modèle échoue
+        aussi, l'erreur remonte normalement : le filet de sécurité existant (article repris au
+        cycle suivant, voir pipeline.py) reste la dernière protection."""
         attempts = [
             (key_index, model) for key_index in range(len(self._clients)) for model in self._models
         ]
@@ -588,7 +600,8 @@ class GeminiAnalyzer:
                     raise
                 next_key_index, next_model = attempts[attempt_index + 1]
                 logger.warning(
-                    "Quota atteint sur %s (clé n°%d) — bascule sur %s (clé n°%d).",
+                    "Échec (quota ou erreur serveur transitoire) sur %s (clé n°%d) — bascule "
+                    "sur %s (clé n°%d).",
                     model,
                     key_index + 1,
                     next_model,
@@ -625,7 +638,7 @@ class GeminiAnalyzer:
                 ),
             )
         except errors.APIError as exc:
-            if exc.code == 429:
+            if exc.code == 429 or exc.code in _RETRYABLE_SERVER_ERROR_CODES:
                 raise QuotaExceededError(str(exc)) from exc
             raise AnalysisError(f"Erreur API Gemini ({exc.code}) : {exc.message}") from exc
 

@@ -281,6 +281,55 @@ def test_classify_bascule_sur_le_secours_apres_429(gemini_with_fallback, monkeyp
     assert result.category == Category.COMEBACK_SORTIE
 
 
+@pytest.mark.parametrize("status_code", [500, 502, 503, 504])
+def test_classify_bascule_sur_le_secours_apres_erreur_serveur_transitoire(
+    gemini_with_fallback, monkeypatch, make_article, status_code
+):
+    """Régression T15ter (incident réel du 28/07/2026) : un 503 sur le modèle principal doit
+    déclencher le même repli qu'un 429, pas remonter directement en AnalysisError — sinon toute
+    la chaîne de secours ne sert à rien face à une simple surcharge transitoire du fournisseur."""
+    calls = []
+
+    def _generate_content(*, model, **kwargs):
+        calls.append(model)
+        if model == "gemini-3.1-flash-lite":
+            raise errors.APIError(
+                code=status_code, response_json={"error": {"message": "unavailable"}}
+            )
+        return _FakeResponse(
+            {
+                "category": "COMEBACK_SORTIE",
+                "importance": "MAJEUR",
+                "virality": "ELEVE",
+                "virality_reason": "Test.",
+                "artists": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        gemini_with_fallback._clients[0].models, "generate_content", _generate_content
+    )
+    result, _, _ = gemini_with_fallback.classify(make_article(), france_flag=False)
+
+    assert calls == ["gemini-3.1-flash-lite", "gemini-3.6-flash"]
+    assert result.category == Category.COMEBACK_SORTIE
+
+
+def test_classify_erreur_client_non_retryable_leve_analysis_error_simple(
+    gemini_with_fallback, monkeypatch, make_article
+):
+    """Une erreur non listée comme transitoire (ex. 400) ne doit PAS déclencher le repli — elle
+    ne se résoudra pas en retentant sur un autre modèle, contrairement à un 429/5xx."""
+
+    def _raise(**kwargs):
+        raise errors.APIError(code=400, response_json={"error": {"message": "bad request"}})
+
+    monkeypatch.setattr(gemini_with_fallback._clients[0].models, "generate_content", _raise)
+    with pytest.raises(analyzer.AnalysisError) as exc_info:
+        gemini_with_fallback.classify(make_article(), france_flag=False)
+    assert not isinstance(exc_info.value, analyzer.QuotaExceededError)
+
+
 def test_classify_leve_si_le_secours_echoue_aussi(gemini_with_fallback, monkeypatch, make_article):
     def _raise(**kwargs):
         raise errors.APIError(code=429, response_json={"error": {"message": "quota"}})

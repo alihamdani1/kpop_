@@ -101,9 +101,14 @@ class Settings(BaseSettings):
     # appels/jour). Les threads ne coûtent que 1-2 appels/jour : largement la marge pour un
     # modèle de meilleure qualité rédactionnelle (flash plutôt que flash-lite) sans impact sur
     # le quota qui compte vraiment.
+    # Les 3 noms ci-dessous ont été vérifiés par un vrai appel API (voir incident du 28/07/2026,
+    # TODO.md T15ter) : `gemini-3.1-flash` et `gemini-2.5-flash` (choisis initialement par
+    # analogie avec les variantes -lite existantes) n'existent pas/plus pour ce compte — 404
+    # immédiat, sans jamais déclencher le repli. `gemini-3.1-flash-lite` en dernier secours est
+    # le même modèle déjà éprouvé comme fallback du pipeline articles (T5ter).
     thread_gemini_model: str = "gemini-3.5-flash"
-    thread_gemini_fallback_model: str = "gemini-3.1-flash"
-    thread_gemini_second_fallback_model: str = "gemini-2.5-flash"
+    thread_gemini_fallback_model: str = "gemini-3.6-flash"
+    thread_gemini_second_fallback_model: str = "gemini-3.1-flash-lite"
     # Délai avant qu'une sélection PENDING (personne n'a réagi) soit marquée EXPIRED.
     thread_selection_ttl_hours: float = 24.0
 

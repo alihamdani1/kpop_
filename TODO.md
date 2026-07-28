@@ -781,9 +781,30 @@ associés (`test_thread_models.py`, `test_analyzer.py`, `test_thread_pipeline.py
 si hashtag hors dernier tweet, non-régression sur la limite de tweets/caractères déjà testée),
 sur l'injection du nouveau contenu de prompt, sur la chaîne de modèles dédiée (`_gemini()`
 n'utilise plus `gemini_model`/`*_fallback_model`). ✔️ Vérifié par tests (173 tests, `ruff`
-propre) — **pas encore observé en conditions réelles** : reste un vrai `thread-resolve` pour
-juger qualitativement le style obtenu (langage anti-IA, rythme, hook+frame) et confirmer que le
-nouveau modèle (`gemini-3.5-flash` et non plus `-lite`) répond correctement au schéma resserré.
+propre).
+
+**Incident réel (28/07/2026) et correctifs** : après déploiement, une sélection est restée
+bloquée en `PENDING` malgré une réaction humaine bien détectée par le bot. Diagnostic :
+- `thread_gemini_fallback_model` (`gemini-3.1-flash`) et `thread_gemini_second_fallback_model`
+  (`gemini-2.5-flash`) — choisis par analogie avec les variantes `-lite` existantes, sans appel
+  réel de vérification — n'existent pas/plus pour ce compte (404). Seul `thread_gemini_model`
+  (`gemini-3.5-flash`) était valide, mais temporairement surchargé (503) au moment de
+  l'incident. **Corrigé** : chaîne revérifiée par de vrais appels API —
+  `gemini-3.5-flash` → `gemini-3.6-flash` → `gemini-3.1-flash-lite` (ce dernier déjà éprouvé
+  comme secours du pipeline articles, T5ter).
+- Plus profond : `_generate_with_fallback` ne déclenchait le repli que sur un 429 (quota) —
+  un 503 remontait directement en `AnalysisError`, sans jamais essayer les modèles de secours,
+  quelle que soit la chaîne configurée. **Corrigé** : `QuotaExceededError` est désormais levée
+  aussi pour les codes 500/502/503/504 (nouvelle constante `_RETRYABLE_SERVER_ERROR_CODES` dans
+  `analyzer.py`) — une panne transitoire du fournisseur bascule maintenant sur le modèle suivant
+  comme un 429, au lieu de faire échouer tout l'appel. Ce correctif bénéficie aussi au pipeline
+  articles (même fonction partagée).
+- ✔️ Revérifié par un vrai appel `write_thread()` après correctif : bascule automatique
+  observée (503 sur `gemini-3.5-flash` → succès sur `gemini-3.6-flash`), thread généré
+  conforme au nouveau style (hook chiffré, ton naturel, `premise_respectee=True`). Tests ajoutés
+  (`test_classify_bascule_sur_le_secours_apres_erreur_serveur_transitoire`, paramétré sur les 4
+  codes 5xx ; régression confirmant qu'un 400 ne déclenche toujours pas le repli) — 185 tests au
+  vert.
 
 ### ✅ T15quater — Couverture éditoriale (piliers) + équilibrage groupe/thème/angle — FAIT
 
