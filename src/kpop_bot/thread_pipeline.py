@@ -17,17 +17,26 @@ logger = logging.getLogger(__name__)
 _OPTION_EMOJIS = ["🇦", "🇧", "🇨"]
 
 
+def _thread_api_keys(settings: Settings) -> list[str]:
+    """Clé 2 en priorité pour les threads (demande explicite, pas le comportement par défaut de
+    la chaîne de secours) — même principe que `pipeline._tiktok_api_keys` (T14) : liste de clés
+    inversée plutôt que de modifier `_generate_with_fallback`, qui reste inchangée et partagée
+    avec le pipeline articles. Repli sur la clé 1 seulement si la clé 2 épuise toute sa chaîne
+    de modèles (ou si elle est absente, auquel cas cette inversion est un no-op)."""
+    keys = [settings.gemini_api_key]
+    if settings.gemini_api_key_2:
+        keys.append(settings.gemini_api_key_2)
+    return list(reversed(keys))
+
+
 def _gemini(settings: Settings) -> analyzer.GeminiAnalyzer:
     """Chaîne de modèles dédiée aux threads (T15ter) — distincte de gemini_model/*_fallback_model
     (réservés au pipeline articles, ~225 appels/jour). Volume threads négligeable (1-2
     appels/jour) : marge pour un modèle de meilleure qualité rédactionnelle sans impact sur le
     quota qui compte vraiment."""
-    keys = [settings.gemini_api_key]
-    if settings.gemini_api_key_2:
-        keys.append(settings.gemini_api_key_2)
     artist_tiers = analyzer.load_artist_tiers(settings.artist_tiers_path)
     return analyzer.GeminiAnalyzer(
-        api_keys=keys,
+        api_keys=_thread_api_keys(settings),
         models=[
             settings.thread_gemini_model,
             settings.thread_gemini_fallback_model,

@@ -806,6 +806,11 @@ bloquée en `PENDING` malgré une réaction humaine bien détectée par le bot. 
   codes 5xx ; régression confirmant qu'un 400 ne déclenche toujours pas le repli) — 185 tests au
   vert.
 
+**Clé API 2 en priorité** (demande explicite) : nouvelle `thread_pipeline._thread_api_keys()`,
+même principe que `pipeline._tiktok_api_keys` (T14) — liste de clés inversée (clé 2 d'abord, clé
+1 en repli si la clé 2 épuise toute sa chaîne de modèles), sans toucher à
+`_generate_with_fallback`. No-op si `gemini_api_key_2` est absente.
+
 ### ✅ T15quater — Couverture éditoriale (piliers) + équilibrage groupe/thème/angle — FAIT
 
 **Origine** : premier lot réel d'idéation hybride (T15bis) observé en conditions réelles —

@@ -22,6 +22,7 @@ from kpop_bot.thread_pipeline import (
     _candidate_pairs,
     _gemini,
     _load_viral_groups,
+    _thread_api_keys,
     run_thread_replenish,
     run_thread_resolve,
     run_thread_select,
@@ -63,6 +64,28 @@ def test_gemini_utilise_la_chaine_de_modeles_dediee_aux_threads(settings):
     )
     instance = _gemini(settings)
     assert instance._models == ["gemini-thread-1", "gemini-thread-2", "gemini-thread-3"]
+
+
+def test_thread_api_keys_priorise_la_2e_cle_api_si_presente():
+    """Demande explicite : les appels threads passent en priorité sur la 2e clé API — même
+    principe que _tiktok_api_keys (T14), liste de clés inversée."""
+    settings = Settings(
+        gemini_api_key="cle-1",
+        gemini_api_key_2="cle-2",
+        discord_webhook_route_a="https://discord.com/api/webhooks/fake/a",
+        discord_webhook_route_b="https://discord.com/api/webhooks/fake/b",
+    )
+    assert _thread_api_keys(settings) == ["cle-2", "cle-1"]
+
+
+def test_thread_api_keys_sans_2e_cle_reste_sur_la_premiere():
+    settings = Settings(
+        gemini_api_key="cle-1",
+        gemini_api_key_2=None,
+        discord_webhook_route_a="https://discord.com/api/webhooks/fake/a",
+        discord_webhook_route_b="https://discord.com/api/webhooks/fake/b",
+    )
+    assert _thread_api_keys(settings) == ["cle-1"]
 
 
 def _idea(**overrides) -> ThreadTopicIdea:
