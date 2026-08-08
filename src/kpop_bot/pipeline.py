@@ -26,6 +26,7 @@ class CycleStats:
     classified: int = 0
     route_a: int = 0
     route_b: int = 0
+    route_concert: int = 0
     filtered: int = 0
     filtered_reviewed: int = 0
     analysis_failed: int = 0
@@ -46,6 +47,7 @@ class CycleStats:
         return (
             f"collectés={self.fetched} nouveaux={self.new} repris={self.reprocessed_failed} "
             f"classifiés={self.classified} routeA={self.route_a} routeB={self.route_b} "
+            f"routeConcert={self.route_concert} "
             f"filtrés={self.filtered} vers_verif={self.filtered_reviewed} "
             f"échecs_analyse={self.analysis_failed} "
             f"envoyés={self.sent} échecs_envoi={self.send_failed} "
@@ -166,7 +168,7 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
 
         tiktok_result = None
         tin3 = tout3 = 0
-        if route == Route.A and gemini_tiktok is not None:
+        if route in (Route.A, Route.CONCERT) and gemini_tiktok is not None:
             # Échec non bloquant : le tweet/résumé vidéo a déjà réussi, un script TikTok raté
             # ne doit ni faire échouer l'article ni arrêter le cycle — c'est un bonus, pas un
             # pré-requis de diffusion (voir T14).
@@ -207,6 +209,8 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
             stats.route_a += 1
         elif route == Route.B:
             stats.route_b += 1
+        elif route == Route.CONCERT:
+            stats.route_concert += 1
         else:
             stats.filtered += 1
 
@@ -224,6 +228,7 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
                 article,
                 url_a=settings.discord_webhook_route_a,
                 url_b=settings.discord_webhook_route_b,
+                url_concert=settings.discord_webhook_concert,
                 timeout=settings.request_timeout_seconds,
                 index=send_index,
             )
@@ -239,7 +244,7 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
         # échec ici ne doit jamais faire revenir l'article en arrière (voir T14).
         if (
             settings.discord_webhook_tiktok
-            and article.route == Route.A
+            and article.route in (Route.A, Route.CONCERT)
             and article.tiktok_script_body
         ):
             tiktok_send_index += 1
@@ -289,6 +294,7 @@ def resend_sent(settings: Settings, *, limit: int | None = None) -> int:
             article,
             url_a=settings.discord_webhook_route_a,
             url_b=settings.discord_webhook_route_b,
+            url_concert=settings.discord_webhook_concert,
             timeout=settings.request_timeout_seconds,
             index=index,
         )

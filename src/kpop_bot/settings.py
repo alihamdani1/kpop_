@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # n'est fait (comportement identique à avant T14). Route A uniquement (mêmes articles
     # qui reçoivent déjà video_summary).
     discord_webhook_tiktok: str | None = None
+    # Salon dédié "#concert" — Concert/Événement France (voir Route.CONCERT dans models.py).
+    # Optionnel : absent, ces articles retombent sur discord_webhook_route_a (comportement
+    # identique à avant l'introduction de cette route dédiée) — voir notifier._webhook_url_for.
+    # Présent, ils partent uniquement vers ce salon, plus jamais vers #actus-videos.
+    discord_webhook_concert: str | None = None
     # Espacement minimum entre deux appels Gemini réels (voir analyzer.py `_throttle`).
     # 15 RPM -> 4s/appel au maximum ; 4.5s laisse ~11% de marge. Évite de reproduire la
     # rafale qui avait déclenché un 429 en test avec --limit élevé et aucune pause.

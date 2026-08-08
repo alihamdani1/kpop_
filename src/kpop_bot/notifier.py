@@ -1,5 +1,6 @@
-"""Diffusion Discord (T6). Deux routes, deux webhooks — pas de salon par catégorie, voir
-context.md §4. `BRUIT_INUTILE` n'atteint jamais cette étape (filtré avant, en amont).
+"""Diffusion Discord (T6). Route A/B par score de viralité, plus une route dédiée
+Concert/Événement France (#concert, optionnelle — voir context.md §4). `BRUIT_INUTILE`
+n'atteint jamais cette étape (filtré avant, en amont).
 
 Chaque article retenu produit QUATRE messages Discord distincts, pas un seul embed multi-champs :
 1. En-tête "INFO {n}" (n = position de l'article dans le cycle en cours).
@@ -60,7 +61,7 @@ def _score_field(record: ArticleRecord) -> dict:
 
 def build_embed(record: ArticleRecord) -> dict:
     """Embed d'information (titre, score, résumé) — SANS le brouillon de tweet, envoyé à
-    part par `notify()`. Suppose `route in (A, B)`."""
+    part par `notify()`. Suppose `route in (A, B, CONCERT)`."""
     color = _VIRALITY_COLORS[record.virality] if record.virality else 0x607D8B
     base = {
         "title": record.title,
@@ -70,7 +71,7 @@ def build_embed(record: ArticleRecord) -> dict:
         "timestamp": record.published_at.isoformat(),
     }
 
-    if record.route == Route.A:
+    if record.route in (Route.A, Route.CONCERT):
         base["fields"] = [
             _score_field(record),
             {
@@ -100,11 +101,17 @@ def build_tweet_header() -> str:
     return "# Brouillon Tweet"
 
 
-def _webhook_url_for(record: ArticleRecord, *, url_a: str, url_b: str) -> str:
+def _webhook_url_for(
+    record: ArticleRecord, *, url_a: str, url_b: str, url_concert: str | None = None
+) -> str:
     if record.route == Route.A:
         return url_a
     if record.route == Route.B:
         return url_b
+    if record.route == Route.CONCERT:
+        # Absent -> repli sur Route A (comportement d'avant l'introduction de #concert),
+        # voir settings.discord_webhook_concert.
+        return url_concert or url_a
     raise ValueError(f"Aucun webhook pour la route {record.route!r} — article filtré attendu ici.")
 
 
@@ -199,11 +206,19 @@ def send_message_with_images(
     _post_webhook_with_files(webhook_url, content, image_paths, timeout=timeout)
 
 
-def notify(record: ArticleRecord, *, url_a: str, url_b: str, timeout: float, index: int) -> None:
+def notify(
+    record: ArticleRecord,
+    *,
+    url_a: str,
+    url_b: str,
+    url_concert: str | None = None,
+    timeout: float,
+    index: int,
+) -> None:
     """Point d'entrée du pipeline : envoie les 4 messages d'un article ANALYZED, dans
     l'ordre, vers le même webhook. `index` numérote l'article au sein du cycle en cours
     (voir `build_info_header`)."""
-    webhook_url = _webhook_url_for(record, url_a=url_a, url_b=url_b)
+    webhook_url = _webhook_url_for(record, url_a=url_a, url_b=url_b, url_concert=url_concert)
     send_message(webhook_url, build_info_header(index), timeout=timeout)
     send_embed(webhook_url, build_embed(record), timeout=timeout)
     send_message(webhook_url, build_tweet_header(), timeout=timeout)

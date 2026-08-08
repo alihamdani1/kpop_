@@ -53,20 +53,27 @@ Le score n'est **calculé que pour les articles retenus** (catégorie ≠ « Bru
 article filtré n'a ni score de viralité ni brouillon de tweet, par cohérence — il n'est de toute
 façon jamais diffusé. Il s'exprime sur une échelle à 4 niveaux (Faible / Modéré / Élevé / Viral).
 
-## 4. Routage à deux salons — la logique de diffusion
+## 4. Routage à trois salons — la logique de diffusion
 
-Le score de viralité et la catégorie déterminent, pour chaque article retenu, l'un de deux
-parcours. Il n'y a **pas** de salon par catégorie (scandale/comeback/concert) : le routage se
-fait uniquement sur la valeur éditoriale et sociale de l'article.
+Le score de viralité et la catégorie déterminent, pour chaque article retenu, l'un de trois
+parcours. En dehors du cas Concert France (voir ci-dessous), il n'y a **pas** de salon par
+catégorie (scandale/comeback) : le routage se fait sur la valeur éditoriale et sociale de
+l'article.
 
-| | **Route A — `#actus-videos`** (haute valeur) | **Route B — `#drafts-twitter`** (volume quotidien) |
-|---|---|---|
-| **Déclenchée par** | Score `VIRAL` ou `ÉLEVÉ`, **ou** catégorie `Concert/Événement France` (quel que soit le score) | Score `MODÉRÉ` ou `FAIBLE`, catégorie autre que Concert France |
-| **Contenu de l'embed** | Titre, badge de score, **résumé détaillé** (pensé pour scripter une vidéo), brouillon de tweet | Titre, badge de score, brouillon de tweet — **prêt à copier-coller**, rien d'autre |
-| **Usage rédaction** | Sujets à traiter en profondeur (vidéo, article) | Publication rapide en volume sur X |
+| | **Route A — `#actus-videos`** (haute valeur) | **Route B — `#drafts-twitter`** (volume quotidien) | **Route Concert — `#concert`** (billetterie France) |
+|---|---|---|---|
+| **Déclenchée par** | Score `VIRAL` ou `ÉLEVÉ`, hors Concert France | Score `MODÉRÉ` ou `FAIBLE`, hors Concert France | Catégorie `Concert/Événement France`, quel que soit le score |
+| **Contenu de l'embed** | Titre, badge de score, **résumé détaillé** (pensé pour scripter une vidéo), brouillon de tweet | Titre, badge de score, brouillon de tweet — **prêt à copier-coller**, rien d'autre | Même contenu que la Route A (résumé détaillé + tweet) |
+| **Usage rédaction** | Sujets à traiter en profondeur (vidéo, article) | Publication rapide en volume sur X | Suivi dédié des annonces et dates de billetterie France, sans être noyé dans le volume général |
 
-Un article classé « Bruit inutile » n'emprunte aucune des deux routes : il est archivé sans
+Un article classé « Bruit inutile » n'emprunte aucune des trois routes : il est archivé sans
 aucun jugement de viralité ni brouillon de tweet.
+
+**Salon Concert optionnel** : si le webhook `#concert` n'est pas configuré
+(`DISCORD_WEBHOOK_CONCERT` absent), les articles Concert/Événement France retombent
+automatiquement sur la Route A (`#actus-videos`) — comportement identique à celui d'avant
+l'introduction de cette route dédiée. Aucune modification de code n'est nécessaire pour
+activer le salon dédié : ajouter la variable suffit.
 
 **Filet de sécurité « France » (règle dure, non négociable par l'IA)** : si le titre ou l'extrait
 d'un article contient l'un des mots `Paris`, `France`, `Accor Arena`, `Stade de France`,
@@ -113,21 +120,24 @@ hallucination du modèle ne peut faire passer un événement français à traver
                     ▼                               ▼
         ┌───────────────────────┐   ┌───────────────────────────────────┐
         │ ARCHIVÉ EN BASE       │   │ ⑤ DÉTERMINATION DE ROUTE (code)   │
-        │ (jamais envoyé)       │   │ A si VIRAL/ÉLEVÉ/Concert France   │
-        └───────────────────────┘   │ B sinon (MODÉRÉ/FAIBLE)           │
+        │ (jamais envoyé)       │   │ CONCERT si Concert/Évén. France   │
+        └───────────────────────┘   │ A si VIRAL/ÉLEVÉ (hors Concert)   │
+                                    │ B sinon (MODÉRÉ/FAIBLE)           │
                                     └────────────────┬──────────────────┘
                                                      ▼
                             ┌────────────────────────────────────────────┐
                             │  ⑥ ANALYSE IA — appel 2 : RÉDACTION        │
                             │  • résumé_fr (2 phrases) — toujours        │
                             │  • brouillon_tweet (<280 car.) — toujours  │
-                            │  • résumé_détaillé — seulement si Route A  │
+                            │  • résumé_détaillé — sauf Route B          │
                             └────────────────┬───────────────────────────┘
                                              ▼
                             ┌────────────────────────────────────────────┐
                             │  ⑦ DIFFUSION DISCORD                       │
                             │  Route A → #actus-videos                   │
                             │  Route B → #drafts-twitter                 │
+                            │  Route CONCERT → #concert (repli #actus-  │
+                            │  videos si webhook non configuré)          │
                             └────────────────────────────────────────────┘
 ```
 
@@ -176,6 +186,6 @@ quoi que ce soit pour les articles finalement écartés comme « bruit ».
 | **Item** | Une entrée d'un flux RSS = un article candidat |
 | **Empreinte** | Hash SHA-256 de l'URL canonique, sert de clé de déduplication |
 | **Score de viralité** | Estimation heuristique (produite par le premier appel IA) du potentiel de partage social d'un article. Basée sur le texte + une table statique de poids par artiste — pas sur des données d'engagement réelles |
-| **Route A / Route B** | Les deux parcours de diffusion Discord, déterminés en code à partir de la catégorie et du score de viralité — voir §4 |
+| **Route A / Route B / Route Concert** | Les trois parcours de diffusion Discord, déterminés en code à partir de la catégorie et du score de viralité. Route Concert (`#concert`) est optionnelle : sans webhook dédié configuré, elle retombe sur Route A — voir §4 |
 | **Brouillon de tweet** | Texte de moins de 280 caractères, ton journalistique neutre, généré par le second appel IA pour tout article retenu (hors bruit). Jamais publié automatiquement — destiné à être relu puis copié-collé par la rédaction |
-| **Filet mots-clés France** | Règle déterministe, non contournable par l'IA, qui force la catégorie Concert/Événement France (et donc la Route A) dès qu'un mot-clé géographique français apparaît dans le titre ou l'extrait — voir §4 |
+| **Filet mots-clés France** | Règle déterministe, non contournable par l'IA, qui force la catégorie Concert/Événement France (et donc la Route Concert) dès qu'un mot-clé géographique français apparaît dans le titre ou l'extrait — voir §4 |

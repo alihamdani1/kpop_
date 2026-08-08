@@ -57,3 +57,23 @@ sources:
     # 25/07/2026.
     url: https://www.kpopstarz.com/rss/archives/archives.xml
     active: true
+
+  - name: dear. korea
+    # Ajouté pour combler un vrai trou : aucune des 5 sources précédentes ne couvre les
+    # concerts/événements K-pop en France — elles ne relaient une tournée française
+    # qu'après coup, si jamais. dear. korea est un blog francophone dédié à la Corée, avec
+    # une rubrique "AGENDA" spécifiquement sur les concerts K-pop en France (ex. titres
+    # constatés : "AGENDA : JUSTB et YOUNG POSSE en concert gratuit au Vincennes Estival
+    # Club", "LIVE REPORT : TWICE ambiance une nouvelle fois l'Accor Arena"). Flux WordPress
+    # standard, contenu vérifié pertinent (mélange interviews/K-drama à filtrer par le
+    # classificateur, comme attendu). Vérifié manuellement le 08/08/2026.
+    url: https://dearkorea.fr/feed/
+    active: true
+
+  - name: Hellokpop
+    # Complète le filet Route A : couverture large des tournées/concerts K-pop à l'échelle
+    # mondiale (Singapour, Manille... constaté sur le flux), ce qui peut inclure des dates
+    # France plus tôt que les 5 sources déjà en place. Flux WordPress standard, fonctionnel.
+    # Vérifié manuellement le 08/08/2026.
+    url: https://www.hellokpop.com/feed/
+    active: true

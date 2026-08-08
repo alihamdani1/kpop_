@@ -64,6 +64,14 @@ def test_embed_route_b_ne_contient_ni_resume_ni_tweet(make_article):
     assert "Brouillon de tweet" not in field_names
 
 
+def test_embed_route_concert_contient_le_resume_detaille_comme_route_a(make_article):
+    article = make_article(route=Route.CONCERT, video_summary="Dates de billetterie France.")
+    embed = build_embed(article)
+    field_names = [f["name"] for f in embed["fields"]]
+    assert "Résumé détaillé" in field_names
+    assert "Score de viralité" in field_names
+
+
 # --- En-têtes (éléments fixes, sans appel IA). ---
 
 
@@ -134,6 +142,38 @@ def test_notify_envoie_quatre_messages_dans_l_ordre_vers_le_bon_webhook(make_art
     assert "embeds" in bodies[1]
     assert bodies[2] == {"content": "# Brouillon Tweet"}
     assert bodies[3] == {"content": "Tweet isolé, rien autour."}
+
+
+@respx.mock
+def test_notify_route_concert_sans_webhook_dedie_retombe_sur_route_a(make_article):
+    """Sans DISCORD_WEBHOOK_CONCERT configuré, un article Concert France doit partir sur le
+    webhook Route A — comportement d'avant l'introduction de la route dédiée."""
+    url_a = "https://discord.com/api/webhooks/fake/a"
+    url_b = "https://discord.com/api/webhooks/fake/b"
+    mock_a = respx.post(url_a).mock(return_value=httpx.Response(204))
+    mock_b = respx.post(url_b).mock(return_value=httpx.Response(204))
+
+    article = make_article(route=Route.CONCERT, tweet_draft="Tweet concert.")
+    notify(article, url_a=url_a, url_b=url_b, timeout=5.0, index=1)
+
+    assert mock_a.call_count == 4
+    assert not mock_b.called
+
+
+@respx.mock
+def test_notify_route_concert_avec_webhook_dedie_part_sur_le_salon_concert(make_article):
+    url_a = "https://discord.com/api/webhooks/fake/a"
+    url_b = "https://discord.com/api/webhooks/fake/b"
+    url_concert = "https://discord.com/api/webhooks/fake/concert"
+    mock_a = respx.post(url_a).mock(return_value=httpx.Response(204))
+    respx.post(url_b).mock(return_value=httpx.Response(204))
+    mock_concert = respx.post(url_concert).mock(return_value=httpx.Response(204))
+
+    article = make_article(route=Route.CONCERT, tweet_draft="Tweet concert.")
+    notify(article, url_a=url_a, url_b=url_b, url_concert=url_concert, timeout=5.0, index=1)
+
+    assert mock_concert.call_count == 4
+    assert not mock_a.called
 
 
 # --- Canal #info-a-verifier (T13) : message unique et allégé pour le bruit filtré. ---

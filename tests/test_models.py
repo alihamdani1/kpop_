@@ -25,9 +25,9 @@ def test_route_bruit_toujours_ignore():
     assert determine_route(Category.BRUIT_INUTILE, Virality.VIRAL) == Route.IGNORED
 
 
-def test_route_concert_france_toujours_route_a_quelle_que_soit_la_viralite():
+def test_route_concert_france_toujours_route_concert_quelle_que_soit_la_viralite():
     for virality in (Virality.FAIBLE, Virality.MODERE, Virality.ELEVE, Virality.VIRAL, None):
-        assert determine_route(Category.CONCERT_EVENEMENT_FRANCE, virality) == Route.A
+        assert determine_route(Category.CONCERT_EVENEMENT_FRANCE, virality) == Route.CONCERT
 
 
 @pytest.mark.parametrize("virality", [Virality.VIRAL, Virality.ELEVE])

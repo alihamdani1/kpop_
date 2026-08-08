@@ -40,6 +40,7 @@ VIRALITY_BADGES: dict[Virality, str] = {
 class Route(StrEnum):
     A = "A"  # #actus-videos — haute valeur
     B = "B"  # #drafts-twitter — volume quotidien
+    CONCERT = "CONCERT"  # #concert — Concert/Événement France, salon dédié
     IGNORED = "IGNORED"  # bruit inutile, jamais diffusé
 
 
@@ -89,15 +90,17 @@ def determine_route(category: Category, virality: Virality | None) -> Route:
     """Détermine la route de diffusion. Décision prise en code, jamais laissée à l'IA.
 
     - BRUIT_INUTILE -> ignoré, aucun envoi.
-    - CONCERT_EVENEMENT_FRANCE ou viralité VIRAL/ÉLEVÉ -> Route A (#actus-videos).
-    - Sinon (MODÉRÉ/FAIBLE, hors Concert France) -> Route B (#drafts-twitter).
+    - CONCERT_EVENEMENT_FRANCE -> Route CONCERT (#concert), quelle que soit la viralité —
+      salon dédié pour être averti en premier des dates de billetterie, séparé du volume
+      général de #actus-videos.
+    - Sinon, viralité VIRAL/ÉLEVÉ -> Route A (#actus-videos).
+    - Sinon (MODÉRÉ/FAIBLE) -> Route B (#drafts-twitter).
     """
     if category == Category.BRUIT_INUTILE:
         return Route.IGNORED
-    if category == Category.CONCERT_EVENEMENT_FRANCE or virality in (
-        Virality.VIRAL,
-        Virality.ELEVE,
-    ):
+    if category == Category.CONCERT_EVENEMENT_FRANCE:
+        return Route.CONCERT
+    if virality in (Virality.VIRAL, Virality.ELEVE):
         return Route.A
     return Route.B
 
