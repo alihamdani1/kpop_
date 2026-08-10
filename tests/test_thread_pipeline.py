@@ -40,6 +40,7 @@ def settings(tmp_path: Path) -> Settings:
         gemini_api_key_2=None,
         discord_webhook_route_a="https://discord.com/api/webhooks/fake/a",
         discord_webhook_route_b="https://discord.com/api/webhooks/fake/b",
+        discord_webhook_concert=None,
         discord_webhook_info_a_verifier=None,
         discord_webhook_tiktok=None,
         discord_bot_token=None,

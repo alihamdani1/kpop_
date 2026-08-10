@@ -58,12 +58,25 @@ class Settings(BaseSettings):
     artist_tiers_path: Path = Path("config/artist_tiers.yaml")
 
     # Filet de sécurité France — voir context.md §4. Modifiable sans toucher au code.
+    # "Paris"/"France" couvrent déjà la quasi-totalité des cas (un article mentionne presque
+    # toujours la ville ou le pays). Les salles nommées explicitement ci-dessous ne servent
+    # que le cas marginal où un article ne cite QUE le nom de la salle, sans jamais écrire
+    # "Paris" ni "France" — notamment pour les petites salles où passent des groupes/
+    # solistes moins médiatisés (moins susceptibles d'avoir un article qui prend la peine de
+    # préciser la ville). Ajout 10/08/2026, suite à un signalement sur la couverture des
+    # petits groupes/solistes de passage à Paris.
     france_keywords: list[str] = [
         "Paris",
         "France",
         "Accor Arena",
         "Stade de France",
         "Zénith",
+        "Adidas Arena",
+        "Trianon",
+        "La Cigale",
+        "Olympia",
+        "Élysée Montmartre",
+        "Bataclan",
     ]
 
     # Filet de sécurité record/palier viral — voir T13. Déclenché seulement si un de ces
