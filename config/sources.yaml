@@ -77,3 +77,25 @@ sources:
     # Vérifié manuellement le 08/08/2026.
     url: https://www.hellokpop.com/feed/
     active: true
+
+  - name: Google Alerts - Billetterie FR
+    # dear. korea/Hellokpop publient irrégulièrement (1-2 articles/semaine, parfois des trous
+    # de plusieurs jours) — trop lent pour être "premier informé" d'une billetterie. Cette
+    # alerte cible directement les pages des plateformes de billetterie françaises dès leur
+    # indexation par Google, plus proche de la source réelle qu'un article de blog qui en
+    # parle après coup. Requête : kpop (site:ticketmaster.fr OR site:fnacspectacles.com OR
+    # site:seetickets.com OR site:shotgun.live), fréquence "au fur et à mesure", flux RSS.
+    # Flux Atom valide (HTTP 200) mais vide au moment de l'ajout — normal, Google n'a encore
+    # rien trouvé à remonter. Vérifié manuellement le 10/08/2026.
+    url: https://www.google.com/alerts/feeds/00938253182511072888/1571826076216491413
+    active: true
+
+  - name: Google Alerts - Kpop France
+    # Filet plus large que l'alerte billetterie ci-dessus : capte tout article de presse/blog
+    # mentionnant un concert K-pop en France, même hors des 4 plateformes de billetterie
+    # ciblées. Requête : "k-pop" (Paris OR France OR Zénith OR "Accor Arena" OR "Stade de
+    # France"), mêmes réglages (au fur et à mesure, flux RSS). Flux Atom valide (HTTP 200)
+    # mais vide au moment de l'ajout — normal, idem ci-dessus. Vérifié manuellement le
+    # 10/08/2026.
+    url: https://www.google.com/alerts/feeds/00938253182511072888/8904788714871185417
+    active: true
