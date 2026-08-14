@@ -241,19 +241,15 @@ def notify_review(record: ArticleRecord, *, url: str, timeout: float) -> None:
     send_message(url, build_review_message(record), timeout=timeout)
 
 
-# --- Salon dédié aux scripts TikTok (T14) — Route A uniquement, en plus de #actus-videos. ---
+# --- Salon dédié au post Instagram "actu/breaking news" (T18, remplace le script TikTok de
+# T14) — Route A et Route CONCERT, en plus de #actus-videos. ---
 
 
-def build_tiktok_embed(record: ArticleRecord) -> dict:
-    """Embed contextuel pour le salon TikTok : mêmes infos que l'embed Route A (titre, score,
-    résumé détaillé déjà généré) + les idées de montage — propres à ce salon, pas affichées
-    dans #actus-videos pour ne pas l'encombrer d'un contenu qui ne le concerne pas."""
+def build_instagram_news_embed(record: ArticleRecord) -> dict:
+    """Embed contextuel pour le salon Instagram : mêmes infos que l'embed Route A (titre,
+    score, résumé détaillé déjà généré) — propres à ce salon, comme pour le script TikTok
+    avant lui."""
     color = _VIRALITY_COLORS[record.virality] if record.virality else 0x607D8B
-    ideas = (
-        "\n".join(f"• {idea}" for idea in record.tiktok_visual_ideas)
-        if record.tiktok_visual_ideas
-        else "(non générées)"
-    )
     return {
         "title": record.title,
         "url": record.url,
@@ -263,40 +259,37 @@ def build_tiktok_embed(record: ArticleRecord) -> dict:
         "fields": [
             _score_field(record),
             {"name": "Résumé détaillé", "value": record.video_summary or "(non généré)"},
-            {"name": "💡 Idées de montage", "value": ideas, "inline": False},
         ],
     }
 
 
-def build_tiktok_script_header() -> str:
-    """En-tête précédant le message-script. Voir la note de `build_info_header`."""
-    return "# Script TikTok"
+def build_instagram_news_header() -> str:
+    """En-tête précédant le message-post. Voir la note de `build_info_header`."""
+    return "# Post Instagram"
 
 
-def build_tiktok_script_message(record: ArticleRecord) -> str:
-    """Script complet (accroche + texte à l'écran + corps + chute + légende) en un seul bloc
-    copiable — pensé pour être repris tel quel au tournage et à la publication, même logique
-    que le tweet isolé dans son propre message. Les émojis ici sont des labels de mise en
-    forme ajoutés par le code, pas du contenu généré par l'IA (qui, lui, n'en contient aucun
-    — voir T14)."""
-    hashtags = " ".join(record.tiktok_caption_hashtags)
+def build_instagram_news_message(record: ArticleRecord) -> str:
+    """Post complet (accroche + 2 paragraphes + question d'engagement + hashtags) en un seul
+    bloc copiable — pensé pour être repris tel quel en légende Instagram, même logique que le
+    tweet isolé dans son propre message."""
+    hashtags = " ".join(record.instagram_hashtags)
     return (
-        f"🎬 ACCROCHE\n{record.tiktok_hook}\n\n"
-        f"🖥️ TEXTE À L'ÉCRAN\n{record.tiktok_on_screen_texte}\n\n"
-        f"📜 SCRIPT\n{record.tiktok_script_body}\n\n"
-        f"🎤 CHUTE\n{record.tiktok_closing_hook}\n\n"
-        f"📋 LÉGENDE\n{record.tiktok_caption_legende}\n{hashtags}"
+        f"{record.instagram_hook}\n\n"
+        f"{record.instagram_paragraph_context}\n\n"
+        f"{record.instagram_paragraph_detail}\n\n"
+        f"{record.instagram_engagement_question}\n\n"
+        f"{hashtags}"
     )
 
 
-def notify_tiktok(record: ArticleRecord, *, url: str, timeout: float, index: int) -> None:
-    """Envoie le script TikTok d'un article Route A vers le salon dédié — 4 messages, même
-    logique que `notify()` : en-tête numéroté, embed contextuel, en-tête script, puis le
-    script complet en message brut."""
+def notify_instagram_news(record: ArticleRecord, *, url: str, timeout: float, index: int) -> None:
+    """Envoie le post Instagram d'un article Route A/CONCERT vers le salon dédié — 4 messages,
+    même logique que `notify()` : en-tête numéroté, embed contextuel, en-tête post, puis le
+    texte complet en message brut."""
     send_message(url, build_info_header(index), timeout=timeout)
-    send_embed(url, build_tiktok_embed(record), timeout=timeout)
-    send_message(url, build_tiktok_script_header(), timeout=timeout)
-    send_message(url, build_tiktok_script_message(record), timeout=timeout)
+    send_embed(url, build_instagram_news_embed(record), timeout=timeout)
+    send_message(url, build_instagram_news_header(), timeout=timeout)
+    send_message(url, build_instagram_news_message(record), timeout=timeout)
 
 
 # --- Threads Twitter quotidiens (T15) — picker Discord (webhook + réactions bot) et diffusion
@@ -381,6 +374,25 @@ def build_thread_tweet_header(index: int, total: int) -> str:
 def build_thread_extra_images_message(count: int) -> str:
     """Légende du message final regroupant les photos alternatives (T16bis)."""
     return f"# {count} autre(s) photo(s) au choix, si une image d'un tweet ne convient pas"
+
+
+# --- Visuel social 9:16 (RSS image + tweet -> PNG, voir visual_generator.py/social_pipeline.py)
+# — salon Discord privé de prévisualisation avant publication manuelle sur TikTok/Instagram. ---
+
+
+def build_social_visual_header(index: int) -> str:
+    """En-tête précédant le visuel. Voir la note de `build_info_header` (T6)."""
+    return f"# Post {index}"
+
+
+def notify_social_visual(
+    record: ArticleRecord, image_path: Path, *, url: str, timeout: float, index: int
+) -> None:
+    """Envoie le visuel généré (en-tête + tweet en contenu + visuel en pièce jointe) vers le
+    salon de prévisualisation. Réutilise `send_message_with_image` telle quelle (T16) — le texte
+    du tweet reste le contenu du message, la pièce jointe n'affecte pas sa copie (T16bis)."""
+    send_message(url, build_social_visual_header(index), timeout=timeout)
+    send_message_with_image(url, record.tweet_draft, image_path, timeout=timeout)
 
 
 def notify_thread(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import feedparser
 import httpx
 import pytest
 import respx
@@ -91,6 +92,99 @@ def test_strip_html(raw: str, expected: str):
     from kpop_bot.fetcher import _strip_html
 
     assert _strip_html(raw) == expected
+
+
+# --- Extraction de l'image RSS (visuel social 9:16). ---
+
+
+def _entry_with_extra_xml(extra: str) -> feedparser.FeedParserDict:
+    xml = f"""<?xml version="1.0"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>Test</title>
+<item>
+  <title>Article de test</title>
+  <link>https://example.com/article</link>
+  <description>Un résumé.</description>
+  {extra}
+</item>
+</channel></rss>
+"""
+    return feedparser.parse(xml).entries[0]
+
+
+def test_extract_image_url_media_content():
+    from kpop_bot.fetcher import _extract_image_url
+
+    entry = _entry_with_extra_xml(
+        '<media:content url="https://example.com/media-content.jpg" medium="image"/>'
+    )
+    assert _extract_image_url(entry) == "https://example.com/media-content.jpg"
+
+
+def test_extract_image_url_media_thumbnail_si_pas_de_media_content():
+    from kpop_bot.fetcher import _extract_image_url
+
+    entry = _entry_with_extra_xml('<media:thumbnail url="https://example.com/media-thumb.jpg"/>')
+    assert _extract_image_url(entry) == "https://example.com/media-thumb.jpg"
+
+
+def test_extract_image_url_enclosure_image():
+    from kpop_bot.fetcher import _extract_image_url
+
+    entry = _entry_with_extra_xml(
+        '<enclosure url="https://example.com/enclosure.jpg" type="image/jpeg" length="123"/>'
+    )
+    assert _extract_image_url(entry) == "https://example.com/enclosure.jpg"
+
+
+def test_extract_image_url_ignore_enclosure_non_image():
+    from kpop_bot.fetcher import _extract_image_url
+
+    entry = _entry_with_extra_xml(
+        '<enclosure url="https://example.com/podcast.mp3" type="audio/mpeg" length="123"/>'
+    )
+    assert _extract_image_url(entry) is None
+
+
+def test_extract_image_url_repli_sur_img_dans_le_html_du_resume():
+    from kpop_bot.fetcher import _extract_image_url
+
+    xml = """<?xml version="1.0"?>
+<rss version="2.0"><channel><title>Test</title>
+<item>
+  <title>Article de test</title>
+  <link>https://example.com/article</link>
+  <description><![CDATA[<p>Texte <img src="https://example.com/inline.jpg" alt="">
+  </p>]]></description>
+</item>
+</channel></rss>
+"""
+    entry = feedparser.parse(xml).entries[0]
+    assert _extract_image_url(entry) == "https://example.com/inline.jpg"
+
+
+def test_extract_image_url_none_si_rien_trouve():
+    from kpop_bot.fetcher import _extract_image_url
+
+    entry = _entry_with_extra_xml("")
+    assert _extract_image_url(entry) is None
+
+
+@respx.mock
+def test_fetch_source_alimente_image_url_sur_fetched_item():
+    xml = """<?xml version="1.0"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>Test</title>
+<item>
+  <title>Article avec image</title>
+  <link>https://example.com/article-image</link>
+  <description>Un résumé.</description>
+  <pubDate>Fri, 24 Jul 2026 12:00:00 GMT</pubDate>
+  <media:content url="https://example.com/photo.jpg" medium="image"/>
+</item>
+</channel></rss>
+"""
+    respx.get(_SOURCE.url).mock(return_value=httpx.Response(200, text=xml))
+    items = fetch_source(_SOURCE, timeout=5.0)
+    assert items[0].image_url == "https://example.com/photo.jpg"
 
 
 # --- Requêtes HTTP (respx, aucun réseau réel). ---

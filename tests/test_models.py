@@ -8,6 +8,7 @@ from kpop_bot.models import (
     Category,
     ClassificationResult,
     Importance,
+    InstagramNewsPost,
     Route,
     TweetTag,
     Virality,
@@ -146,3 +147,36 @@ def test_tous_les_tags_ont_un_libelle():
     for tag in TweetTag:
         assert tag in TWEET_TAG_LABELS
         assert TWEET_TAG_LABELS[tag].strip()  # non vide
+
+
+# --- InstagramNewsPost (T18, remplace TikTokScriptResult de T14) ---
+
+_VALID_INSTAGRAM_POST = dict(
+    hook="Un comeback annoncé sans prévenir.",
+    paragraph_context="Le groupe vient de confirmer son retour.",
+    paragraph_detail="Les premières réactions sont déjà nombreuses.",
+    engagement_question="Vous en pensez quoi ?",
+    hashtags=["#KPop", "#Comeback"],
+)
+
+
+def test_instagram_news_post_avec_2_hashtags_est_accepte():
+    post = InstagramNewsPost(**{**_VALID_INSTAGRAM_POST, "hashtags": ["#KPop", "#Comeback"]})
+    assert post.hashtags == ["#KPop", "#Comeback"]
+
+
+def test_instagram_news_post_avec_3_hashtags_est_accepte():
+    post = InstagramNewsPost(
+        **{**_VALID_INSTAGRAM_POST, "hashtags": ["#KPop", "#Comeback", "#GroupeX"]}
+    )
+    assert len(post.hashtags) == 3
+
+
+def test_instagram_news_post_avec_1_seul_hashtag_est_rejete():
+    with pytest.raises(ValidationError):
+        InstagramNewsPost(**{**_VALID_INSTAGRAM_POST, "hashtags": ["#KPop"]})
+
+
+def test_instagram_news_post_avec_4_hashtags_est_rejete():
+    with pytest.raises(ValidationError):
+        InstagramNewsPost(**{**_VALID_INSTAGRAM_POST, "hashtags": ["#A", "#B", "#C", "#D"]})

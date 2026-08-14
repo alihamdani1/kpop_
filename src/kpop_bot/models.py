@@ -154,48 +154,39 @@ class WritingResult(BaseModel):
     )
 
 
-class TikTokCaptionSeo(BaseModel):
-    """Légende + hashtags pour la publication TikTok elle-même (T14)."""
+class InstagramNewsPost(BaseModel):
+    """Sortie du 3e appel IA (T18, remplace le script TikTok de T14) — prompt système dédié,
+    séparé du tweet pour éviter de diluer la qualité entre deux formats différents sur un
+    modèle lite. Déclenché pour la Route A et la Route CONCERT (mêmes articles qui reçoivent
+    déjà `video_summary`), et seulement si un salon dédié est configuré.
 
-    legende: str = Field(
-        description="Légende courte, mots-clés naturels de l'article, aucun emoji."
-    )
-    hashtags: list[str] = Field(
-        description="3-5 hashtags pertinents pour la niche K-pop, mêlant hashtags larges et "
-        "hashtags de niche."
-    )
-
-
-class TikTokScriptResult(BaseModel):
-    """Sortie du 3e appel IA (T14), dédié — prompt système séparé du tweet pour éviter de
-    diluer la qualité entre deux formats très différents sur un modèle lite. Déclenché
-    uniquement pour la Route A (mêmes articles qui reçoivent déjà `video_summary`), et
-    seulement si un salon TikTok dédié est configuré. Contrairement au tweet, aucun emoji
-    n'est autorisé dans aucun champ."""
+    Format "scroll-stopper narratif" : un post Instagram texte façon actu/breaking news
+    (accroche forte, deux courts paragraphes qui développent, question d'engagement finale) —
+    ni un script vidéo à l'oral, ni des diapositives de carrousel."""
 
     hook: str = Field(
-        description="Accroche percutante, 1-2 phrases (~15-20 mots), promesse claire et "
-        "vérifiable, tenue par script_body. Aucun emoji."
+        description="Ligne d'accroche forte, 1-2 phrases — un fait qui arrête le scroll "
+        "(chiffre marquant, affirmation qui surprend, ou déclaration choc). Jamais de "
+        "méta-commentaire du type « info » ou « à lire »."
     )
-    on_screen_texte: str = Field(
-        description="Texte overlay affiché dès les 2 premières secondes, 5-8 mots maximum, "
-        "renforce le hook pour les spectateurs sans son. Aucun emoji."
+    paragraph_context: str = Field(
+        description="1er paragraphe (2-4 phrases) : le contexte — qui, quoi, dans quel cadre. "
+        "Ancré strictement dans les faits fournis, aucune invention."
     )
-    script_body: str = Field(
-        description="Corps du script, 4-6 phrases (~60-80 mots), ton oral/dynamique, plus de "
-        "détail que le tweet. Ancré strictement dans les faits fournis, aucune invention, "
-        "aucun emoji. Doit livrer explicitement la promesse du hook."
+    paragraph_detail: str = Field(
+        description="2e paragraphe (2-4 phrases) : les détails qui font la valeur de l'info — "
+        "réactions, chiffres, enjeu, ce qui rend le sujet notable. Ancré strictement dans les "
+        "faits fournis, aucune invention."
     )
-    closing_hook: str = Field(
-        description="Chute courte (~3-4s à l'oral), orientée déclencheur de partage (taguer "
-        "quelqu'un, question qui divise) plutôt que simple invitation à commenter. Aucun emoji."
+    engagement_question: str = Field(
+        description="Question courte de clôture, qui invite à réagir en commentaire — jamais "
+        "un appel générique à liker/partager."
     )
-    visual_ideas: list[str] = Field(
-        description="3-5 suggestions courtes de plans/images pour le montage — propositions "
-        "créatives, pas des faits, la seule partie où l'improvisation est acceptée."
-    )
-    caption_seo: TikTokCaptionSeo = Field(
-        description="Légende et hashtags pour la publication TikTok elle-même."
+    hashtags: list[str] = Field(
+        min_length=2,
+        max_length=3,
+        description="2 à 3 hashtags pertinents pour la niche K-pop (ex. #KPop et le nom du "
+        "groupe), affichés en toute fin de légende — jamais mêlés au texte.",
     )
 
 
@@ -208,6 +199,11 @@ class FetchedItem(BaseModel):
     published_at: dt.datetime
     raw_summary: str
     fingerprint: str
+    image_url: str | None = Field(
+        default=None,
+        description="Image extraite du flux RSS (media:content/thumbnail, enclosure, ou "
+        "premier <img> du HTML brut) — voir fetcher._extract_image_url. None si aucune trouvée.",
+    )
 
 
 class ArticleStatus(StrEnum):
@@ -441,14 +437,19 @@ class ArticleRecord(BaseModel):
     summary_fr: str | None = None
     video_summary: str | None = None
     tweet_draft: str | None = None
-    tiktok_hook: str | None = None
-    tiktok_on_screen_texte: str | None = None
-    tiktok_script_body: str | None = None
-    tiktok_closing_hook: str | None = None
-    tiktok_visual_ideas: list[str] = Field(default_factory=list)
-    tiktok_caption_legende: str | None = None
-    tiktok_caption_hashtags: list[str] = Field(default_factory=list)
+    instagram_hook: str | None = None
+    instagram_paragraph_context: str | None = None
+    instagram_paragraph_detail: str | None = None
+    instagram_engagement_question: str | None = None
+    instagram_hashtags: list[str] = Field(default_factory=list)
     artists: list[str] = Field(default_factory=list)
+    image_url: str | None = None
+    extra_image_urls: list[str] = Field(
+        default_factory=list,
+        description="Autres images trouvées sur la page article (T18, scraper.py) — captées "
+        "en plus de l'image principale, pas encore consommées ailleurs dans le pipeline.",
+    )
+    social_visual_sent_at: dt.datetime | None = None
     tokens_in: int = 0
     tokens_out: int = 0
     prompt_version: str | None = None

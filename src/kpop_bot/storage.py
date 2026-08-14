@@ -15,6 +15,7 @@ from kpop_bot.models import (
     ClassificationResult,
     FetchedItem,
     Importance,
+    InstagramNewsPost,
     Route,
     SelectionStatus,
     ThreadAngle,
@@ -25,7 +26,6 @@ from kpop_bot.models import (
     ThreadTopicIdea,
     ThreadTopicRecord,
     ThreadWritingResult,
-    TikTokScriptResult,
     Virality,
     WritingResult,
 )
@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS articles (
     url              TEXT NOT NULL,
     published_at     TEXT NOT NULL,
     raw_summary      TEXT NOT NULL,
+    image_url        TEXT,
     status           TEXT NOT NULL DEFAULT 'NEW',
     category         TEXT,
     importance       TEXT,
@@ -49,19 +50,19 @@ CREATE TABLE IF NOT EXISTS articles (
     summary_fr       TEXT,
     video_summary    TEXT,
     tweet_draft      TEXT,
-    tiktok_hook              TEXT,
-    tiktok_on_screen_texte   TEXT,
-    tiktok_script_body       TEXT,
-    tiktok_closing_hook      TEXT,
-    tiktok_visual_ideas      TEXT NOT NULL DEFAULT '[]',
-    tiktok_caption_legende   TEXT,
-    tiktok_caption_hashtags  TEXT NOT NULL DEFAULT '[]',
+    instagram_hook                  TEXT,
+    instagram_paragraph_context     TEXT,
+    instagram_paragraph_detail      TEXT,
+    instagram_engagement_question   TEXT,
+    instagram_hashtags              TEXT NOT NULL DEFAULT '[]',
+    extra_image_urls TEXT NOT NULL DEFAULT '[]',
     artists          TEXT NOT NULL DEFAULT '[]',
     tokens_in        INTEGER NOT NULL DEFAULT 0,
     tokens_out       INTEGER NOT NULL DEFAULT 0,
     prompt_version   TEXT,
     created_at       TEXT NOT NULL,
     sent_at          TEXT,
+    social_visual_sent_at TEXT,
     error            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_articles_status ON articles (status);
@@ -122,14 +123,18 @@ CREATE INDEX IF NOT EXISTS idx_threads_status ON threads (status);
 # avec des données en production). Migration idempotente via PRAGMA table_info : couvre à la
 # fois les bases déjà existantes (ALTER TABLE) et les bases neuves (déjà créées avec ces
 # colonnes par _SCHEMA ci-dessus, donc ce bloc est un no-op pour elles).
+#
+# Les anciennes colonnes tiktok_* (T14) ne sont PAS supprimées ici — SQLite ALTER TABLE DROP
+# COLUMN est disponible mais une suppression reste irréversible sur une base de production ;
+# elles restent simplement inutilisées désormais (remplacées par instagram_*, voir T18), même
+# principe que thread_topics.concept_id resté NULL pour les lignes historiques.
 _MIGRATED_COLUMNS = {
-    "tiktok_hook": "TEXT",
-    "tiktok_on_screen_texte": "TEXT",
-    "tiktok_script_body": "TEXT",
-    "tiktok_closing_hook": "TEXT",
-    "tiktok_visual_ideas": "TEXT NOT NULL DEFAULT '[]'",
-    "tiktok_caption_legende": "TEXT",
-    "tiktok_caption_hashtags": "TEXT NOT NULL DEFAULT '[]'",
+    "instagram_hook": "TEXT",
+    "instagram_paragraph_context": "TEXT",
+    "instagram_paragraph_detail": "TEXT",
+    "instagram_engagement_question": "TEXT",
+    "instagram_hashtags": "TEXT NOT NULL DEFAULT '[]'",
+    "extra_image_urls": "TEXT NOT NULL DEFAULT '[]'",
 }
 
 # Colonne ajoutée après coup sur `thread_topics` (T15bis — idéation hybride) : cette table est
@@ -140,6 +145,13 @@ _THREAD_TOPICS_MIGRATED_COLUMNS = {
     "concept_id": "TEXT",
 }
 
+# Colonnes du visuel social 9:16 (RSS + tweet -> image, voir social_pipeline.py). `image_url`
+# n'a pas besoin de backfill (NULL = simplement inconnu pour les articles déjà en base).
+_SOCIAL_VISUAL_MIGRATED_COLUMNS = {
+    "image_url": "TEXT",
+    "social_visual_sent_at": "TEXT",
+}
+
 
 def _migrate_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
     existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -148,9 +160,27 @@ def _migrate_columns(conn: sqlite3.Connection, table: str, columns: dict[str, st
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
 
+def _migrate_social_visual_columns(conn: sqlite3.Connection) -> None:
+    """`data/kpop.db` est une vraie base en production avec des centaines d'articles déjà
+    `SENT`. Sans précaution, l'ajout de `social_visual_sent_at` les laisserait tous à NULL et le
+    premier run de `social_pipeline.run_social_visuals` inonderait le salon Discord de visuels
+    rétroactifs. Backfill exécuté une seule fois, au moment précis où la colonne est créée (pas
+    à chaque `init_db()`) : les articles déjà SENT avant le déploiement de cette fonctionnalité
+    sont considérés comme déjà traités — seuls les nouveaux envois deviennent candidats."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(articles)").fetchall()}
+    column_is_new = "social_visual_sent_at" not in existing
+    _migrate_columns(conn, "articles", _SOCIAL_VISUAL_MIGRATED_COLUMNS)
+    # `sent_at` existe depuis le schéma initial (T3) sur toute vraie base de production — le
+    # garde-fou ci-dessous ne sert qu'à rester robuste face à un schéma de test volontairement
+    # minimal (voir test_migrate_schema_ajoute_les_colonnes_manquantes), pas un cas réel attendu.
+    if column_is_new and "sent_at" in existing:
+        conn.execute("UPDATE articles SET social_visual_sent_at = sent_at WHERE status = 'SENT'")
+
+
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     _migrate_columns(conn, "articles", _MIGRATED_COLUMNS)
     _migrate_columns(conn, "thread_topics", _THREAD_TOPICS_MIGRATED_COLUMNS)
+    _migrate_social_visual_columns(conn)
     conn.commit()
 
 
@@ -179,8 +209,9 @@ def insert_new_article(conn: sqlite3.Connection, item: FetchedItem) -> int:
     cur = conn.execute(
         """
         INSERT INTO articles
-            (fingerprint, source, title, url, published_at, raw_summary, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?)
+            (fingerprint, source, title, url, published_at, raw_summary, image_url, status,
+             created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'NEW', ?)
         """,
         (
             item.fingerprint,
@@ -189,6 +220,7 @@ def insert_new_article(conn: sqlite3.Connection, item: FetchedItem) -> int:
             item.url,
             item.published_at.isoformat(),
             item.raw_summary,
+            item.image_url,
             now,
         ),
     )
@@ -206,21 +238,26 @@ def save_analysis(
     tokens_in: int,
     tokens_out: int,
     prompt_version: str,
-    tiktok: TikTokScriptResult | None = None,
+    instagram_news: InstagramNewsPost | None = None,
+    image_url: str | None = None,
+    extra_image_urls: list[str] | None = None,
 ) -> None:
     """Enregistre le résultat des appels IA. `writing` est None quand route == IGNORED (bruit
-    inutile) — dans ce cas le statut final est FILTERED, sinon ANALYZED. `tiktok` reste None
-    hors Route A ou si le salon dédié n'est pas configuré (voir T14) — colonnes laissées NULL,
-    aucun impact sur le reste de l'enregistrement."""
+    inutile) — dans ce cas le statut final est FILTERED, sinon ANALYZED. `instagram_news` reste
+    None hors Route A/CONCERT ou si le salon dédié n'est pas configuré (voir T18) — colonnes
+    laissées NULL, aucun impact sur le reste de l'enregistrement. `image_url`/`extra_image_urls`
+    (T18, scraper.py) : passer `image_url` uniquement si le scraping a trouvé mieux que l'image
+    déjà connue (RSS) — None laisse la colonne inchangée plutôt que d'écraser une valeur utile."""
     status = ArticleStatus.FILTERED if route == Route.IGNORED else ArticleStatus.ANALYZED
     conn.execute(
         """
         UPDATE articles SET
             status = ?, category = ?, importance = ?, virality = ?, virality_reason = ?,
             route = ?, france_override = ?, summary_fr = ?, video_summary = ?,
-            tweet_draft = ?, tiktok_hook = ?, tiktok_on_screen_texte = ?,
-            tiktok_script_body = ?, tiktok_closing_hook = ?, tiktok_visual_ideas = ?,
-            tiktok_caption_legende = ?, tiktok_caption_hashtags = ?, artists = ?,
+            tweet_draft = ?, instagram_hook = ?, instagram_paragraph_context = ?,
+            instagram_paragraph_detail = ?, instagram_engagement_question = ?,
+            instagram_hashtags = ?, artists = ?,
+            image_url = COALESCE(?, image_url), extra_image_urls = ?,
             tokens_in = tokens_in + ?, tokens_out = tokens_out + ?, prompt_version = ?,
             error = NULL
         WHERE id = ?
@@ -236,14 +273,14 @@ def save_analysis(
             writing.summary_fr if writing else None,
             writing.video_summary if writing else None,
             writing.tweet_draft if writing else None,
-            tiktok.hook if tiktok else None,
-            tiktok.on_screen_texte if tiktok else None,
-            tiktok.script_body if tiktok else None,
-            tiktok.closing_hook if tiktok else None,
-            json.dumps(tiktok.visual_ideas, ensure_ascii=False) if tiktok else "[]",
-            tiktok.caption_seo.legende if tiktok else None,
-            json.dumps(tiktok.caption_seo.hashtags, ensure_ascii=False) if tiktok else "[]",
+            instagram_news.hook if instagram_news else None,
+            instagram_news.paragraph_context if instagram_news else None,
+            instagram_news.paragraph_detail if instagram_news else None,
+            instagram_news.engagement_question if instagram_news else None,
+            json.dumps(instagram_news.hashtags, ensure_ascii=False) if instagram_news else "[]",
             json.dumps(classification.artists, ensure_ascii=False),
+            image_url,
+            json.dumps(extra_image_urls or [], ensure_ascii=False),
             tokens_in,
             tokens_out,
             prompt_version,
@@ -320,18 +357,19 @@ def _row_to_record(row: sqlite3.Row) -> ArticleRecord:
         summary_fr=row["summary_fr"],
         video_summary=row["video_summary"],
         tweet_draft=row["tweet_draft"],
-        tiktok_hook=row["tiktok_hook"],
-        tiktok_on_screen_texte=row["tiktok_on_screen_texte"],
-        tiktok_script_body=row["tiktok_script_body"],
-        tiktok_closing_hook=row["tiktok_closing_hook"],
-        tiktok_visual_ideas=json.loads(row["tiktok_visual_ideas"])
-        if row["tiktok_visual_ideas"]
-        else [],
-        tiktok_caption_legende=row["tiktok_caption_legende"],
-        tiktok_caption_hashtags=json.loads(row["tiktok_caption_hashtags"])
-        if row["tiktok_caption_hashtags"]
+        instagram_hook=row["instagram_hook"],
+        instagram_paragraph_context=row["instagram_paragraph_context"],
+        instagram_paragraph_detail=row["instagram_paragraph_detail"],
+        instagram_engagement_question=row["instagram_engagement_question"],
+        instagram_hashtags=json.loads(row["instagram_hashtags"])
+        if row["instagram_hashtags"]
         else [],
         artists=json.loads(row["artists"]) if row["artists"] else [],
+        image_url=row["image_url"],
+        extra_image_urls=json.loads(row["extra_image_urls"]) if row["extra_image_urls"] else [],
+        social_visual_sent_at=dt.datetime.fromisoformat(row["social_visual_sent_at"])
+        if row["social_visual_sent_at"]
+        else None,
         tokens_in=row["tokens_in"],
         tokens_out=row["tokens_out"],
         prompt_version=row["prompt_version"],
@@ -339,6 +377,27 @@ def _row_to_record(row: sqlite3.Row) -> ArticleRecord:
         sent_at=dt.datetime.fromisoformat(row["sent_at"]) if row["sent_at"] else None,
         error=row["error"],
     )
+
+
+def pending_social_visuals(conn: sqlite3.Connection, *, limit: int) -> list[ArticleRecord]:
+    """Articles déjà `SENT` (Route A/B/Concert — seules routes atteignant ce statut) sans
+    visuel social encore envoyé. Voir social_pipeline.run_social_visuals."""
+    rows = conn.execute(
+        """
+        SELECT * FROM articles
+        WHERE status = 'SENT' AND social_visual_sent_at IS NULL
+        ORDER BY sent_at ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [_row_to_record(row) for row in rows]
+
+
+def mark_social_visual_sent(conn: sqlite3.Connection, article_id: int) -> None:
+    now = dt.datetime.now(dt.UTC).isoformat()
+    conn.execute("UPDATE articles SET social_visual_sent_at = ? WHERE id = ?", (now, article_id))
+    conn.commit()
 
 
 # --- T15 : backlog de Topics, sélection Discord (réactions), threads générés. ---

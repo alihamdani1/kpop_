@@ -140,3 +140,34 @@ def test_select_extra_images_liste_vide_si_rien_de_disponible(tmp_path):
         tmp_path, group_name="Groupe Sans Photos", concept_id=None, exclude=[], count=5
     )
     assert extra == []
+
+
+# --- select_image_for_article : repli visuel social 9:16 quand l'image RSS est inexploitable. ---
+
+
+def test_select_image_for_article_utilise_le_premier_artiste_avec_des_photos(tmp_path):
+    _make_image(tmp_path / "BTS", "01.jpg")
+    _make_image(tmp_path / "_generic", "generic_01.jpg")
+
+    image = media_library.select_image_for_article(tmp_path, artists=["Groupe Inconnu", "BTS"])
+    assert image is not None
+    assert image.parent.name == "BTS"
+
+
+def test_select_image_for_article_repli_sur_generic_si_aucun_artiste_ne_correspond(tmp_path):
+    _make_image(tmp_path / "_generic", "generic_01.jpg")
+
+    image = media_library.select_image_for_article(tmp_path, artists=["Groupe Inconnu"])
+    assert image is not None
+    assert image.parent.name == "_generic"
+
+
+def test_select_image_for_article_none_si_rien_de_disponible(tmp_path):
+    assert media_library.select_image_for_article(tmp_path, artists=["Groupe Inconnu"]) is None
+
+
+def test_select_image_for_article_sans_artistes_repli_directement_sur_generic(tmp_path):
+    _make_image(tmp_path / "_generic", "generic_01.jpg")
+    image = media_library.select_image_for_article(tmp_path, artists=[])
+    assert image is not None
+    assert image.parent.name == "_generic"

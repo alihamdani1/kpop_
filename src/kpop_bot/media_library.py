@@ -75,6 +75,20 @@ def select_images_for_thread(
     return [shuffled[i % len(shuffled)] for i in range(count)]
 
 
+def select_image_for_article(media_library_path: Path, *, artists: list[str]) -> Path | None:
+    """Repli utilisé par social_pipeline.py quand l'image RSS de l'article est absente ou
+    inexploitable — dossier du premier artiste cité qui a des photos, sinon `_generic` à plat.
+    Contrairement à `_resolve_pool` (threads), pas de sous-catégorie `_generic` par concept : un
+    article n'a pas de `concept_id`. None si aucune image disponible (dégradation gracieuse,
+    aucun visuel n'est alors généré pour cet article)."""
+    for artist in artists:
+        pool = _images_in(media_library_path / artist)
+        if pool:
+            return random.choice(pool)
+    generic_pool = _images_in(media_library_path / "_generic")
+    return random.choice(generic_pool) if generic_pool else None
+
+
 def select_extra_images(
     media_library_path: Path,
     *,

@@ -40,10 +40,10 @@ class Settings(BaseSettings):
     # comme avant (comportement inchangé). Aucun appel Gemini supplémentaire — réutilise la
     # classification déjà produite par classify().
     discord_webhook_info_a_verifier: str | None = None
-    # Salon dédié aux scripts TikTok — voir T14. Optionnel : absent, aucun 3e appel Gemini
-    # n'est fait (comportement identique à avant T14). Route A uniquement (mêmes articles
-    # qui reçoivent déjà video_summary).
-    discord_webhook_tiktok: str | None = None
+    # Salon dédié au post Instagram "actu/breaking news" — voir T18 (remplace le script TikTok
+    # de T14). Optionnel : absent, aucun 3e appel Gemini n'est fait. Route A et Route CONCERT
+    # (mêmes articles qui reçoivent déjà video_summary/résumé détaillé).
+    discord_webhook_instagram_news: str | None = None
     # Salon dédié "#concert" — Concert/Événement France (voir Route.CONCERT dans models.py).
     # Optionnel : absent, ces articles retombent sur discord_webhook_route_a (comportement
     # identique à avant l'introduction de cette route dédiée) — voir notifier._webhook_url_for.
@@ -97,7 +97,7 @@ class Settings(BaseSettings):
 
     # --- T15 : threads Twitter quotidiens — tous optionnels, absents = fonctionnalité inactive,
     # comportement du reste du pipeline strictement inchangé (même principe que
-    # discord_webhook_tiktok pour T14). ---
+    # discord_webhook_instagram_news). ---
     # Bot Discord (Developer Portal), permissions View Channel / Read Message History /
     # Add Reactions uniquement — l'envoi des messages reste 100 % webhook (voir notifier.py),
     # ce token ne sert qu'à poser/lire des réactions (discord_reactions.py).
@@ -132,6 +132,15 @@ class Settings(BaseSettings):
     # Bibliothèque interne d'images (T16) — 1 dossier par groupe + _generic pour les sujets
     # transverses, voir config/media_library/README.md.
     media_library_path: Path = Path("config/media_library")
+
+    # --- Visuel social 9:16 (RSS image + tweet -> PNG), pipeline séparé (social_pipeline.py) du
+    # cycle articles principal — voir TODO.md. Optionnel : webhook absent, fonctionnalité
+    # inactive, comportement du reste du pipeline strictement inchangé (même principe que
+    # discord_webhook_instagram_news). ---
+    discord_webhook_social: str | None = None
+    social_visual_template_path: Path = Path("templates/social_post.html")
+    # Borne le temps d'un run (lancement Chromium + téléchargements d'images RSS).
+    social_visual_batch_limit: int = 20
 
 
 _settings: Settings | None = None

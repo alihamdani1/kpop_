@@ -471,10 +471,116 @@ def test_write_injecte_la_consigne_d_engagement_propre_a_la_categorie(
     assert "[FLASH]" not in captured_prompts[0]  # le tag n'est jamais demandé à l'IA
 
 
-# --- write_tiktok_script (T14) : prompt système dédié, séparé de celui du tweet. ---
+# --- write() : le nom de l'artiste déjà identifié par classify() doit être injecté (T18),
+# pour éviter un tweet qui reste aussi vague qu'un titre racoleur. ---
 
 
-def test_write_tiktok_script_utilise_un_prompt_dedie_et_renvoie_le_schema(
+def test_write_injecte_les_artistes_deja_identifies(gemini, monkeypatch, make_article):
+    captured_prompts: list[str] = []
+
+    def _fake_generate(*, model, contents, config):
+        captured_prompts.append(config.system_instruction)
+        return _FakeResponse({"summary_fr": "Résumé court.", "tweet_draft": "Un tweet."})
+
+    monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
+    from kpop_bot.models import ClassificationResult, Importance
+
+    classification = ClassificationResult(
+        category=Category.COMEBACK_SORTIE, importance=Importance.MODERE, artists=["Groupe X"]
+    )
+    gemini.write(make_article(), classification, Route.B)
+    assert "Groupe X" in captured_prompts[0]
+
+
+def test_write_sans_artiste_identifie_invite_a_rester_general(gemini, monkeypatch, make_article):
+    captured_prompts: list[str] = []
+
+    def _fake_generate(*, model, contents, config):
+        captured_prompts.append(config.system_instruction)
+        return _FakeResponse({"summary_fr": "Résumé court.", "tweet_draft": "Un tweet."})
+
+    monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
+    from kpop_bot.models import ClassificationResult, Importance
+
+    classification = ClassificationResult(
+        category=Category.COMEBACK_SORTIE, importance=Importance.MODERE, artists=[]
+    )
+    gemini.write(make_article(), classification, Route.B)
+    assert "inventer" in captured_prompts[0].lower()
+
+
+def test_write_injecte_le_contexte_de_page_si_fourni(gemini, monkeypatch, make_article):
+    captured_prompts: list[str] = []
+
+    def _fake_generate(*, model, contents, config):
+        captured_prompts.append(config.system_instruction)
+        return _FakeResponse({"summary_fr": "Résumé court.", "tweet_draft": "Un tweet."})
+
+    monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
+    from kpop_bot.models import ClassificationResult, Importance
+
+    classification = ClassificationResult(
+        category=Category.COMEBACK_SORTIE, importance=Importance.MODERE, artists=[]
+    )
+    gemini.write(
+        make_article(),
+        classification,
+        Route.B,
+        page_text="Le membre Jane du groupe X a confirmé son retour en solo.",
+    )
+    assert "Jane" in captured_prompts[0]
+
+
+def test_write_sans_contexte_de_page_ne_l_injecte_pas(gemini, monkeypatch, make_article):
+    captured_prompts: list[str] = []
+
+    def _fake_generate(*, model, contents, config):
+        captured_prompts.append(config.system_instruction)
+        return _FakeResponse({"summary_fr": "Résumé court.", "tweet_draft": "Un tweet."})
+
+    monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
+    from kpop_bot.models import ClassificationResult, Importance
+
+    classification = ClassificationResult(
+        category=Category.COMEBACK_SORTIE, importance=Importance.MODERE, artists=[]
+    )
+    gemini.write(make_article(), classification, Route.B)
+    assert "Contexte additionnel" not in captured_prompts[0]
+
+
+# --- classify() : le contexte de page (T18) doit aussi être exploité pour mieux identifier les
+# artistes quand le titre reste vague à leur sujet. ---
+
+
+def test_classify_injecte_le_contexte_de_page_si_fourni(gemini, monkeypatch, make_article):
+    captured_prompts: list[str] = []
+
+    def _fake_generate(*, model, contents, config):
+        captured_prompts.append(config.system_instruction)
+        return _FakeResponse(
+            {
+                "category": "COMEBACK_SORTIE",
+                "importance": "MODERE",
+                "virality": "MODERE",
+                "virality_reason": "Test.",
+                "artists": ["Groupe X"],
+            }
+        )
+
+    monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
+    gemini.classify(
+        make_article(),
+        france_flag=False,
+        page_text="Le membre Jane du groupe X a confirmé son retour en solo.",
+    )
+    assert "Jane" in captured_prompts[0]
+
+
+# --- write_instagram_news (T18, remplace le script TikTok de T14) : prompt système dédié,
+# format "scroll-stopper narratif", séparé de celui du tweet. ---
+
+
+def test_write_instagram_news_utilise_un_prompt_dedie_et_renvoie_le_schema(
     gemini, monkeypatch, make_article
 ):
     captured_prompts: list[str] = []
@@ -484,14 +590,10 @@ def test_write_tiktok_script_utilise_un_prompt_dedie_et_renvoie_le_schema(
         return _FakeResponse(
             {
                 "hook": "Un record vient de tomber !",
-                "on_screen_texte": "RECORD BATTU",
-                "script_body": "Le groupe X vient de franchir un nouveau palier de vues...",
-                "closing_hook": "Vous vous y attendiez ?",
-                "visual_ideas": ["Zoom sur le compteur de vues", "Archives du clip"],
-                "caption_seo": {
-                    "legende": "Un nouveau record vient de tomber",
-                    "hashtags": ["#kpop", "#kpopnews"],
-                },
+                "paragraph_context": "Le groupe X vient de sortir un nouveau single.",
+                "paragraph_detail": "Le clip a franchi un nouveau palier de vues en 24h.",
+                "engagement_question": "Vous vous y attendiez ?",
+                "hashtags": ["#kpop", "#kpopnews"],
             }
         )
 
@@ -505,21 +607,21 @@ def test_write_tiktok_script_utilise_un_prompt_dedie_et_renvoie_le_schema(
         virality_reason="Test.",
         artists=["Groupe X"],
     )
-    result, tokens_in, tokens_out = gemini.write_tiktok_script(make_article(), classification)
+    result, tokens_in, tokens_out = gemini.write_instagram_news(make_article(), classification)
 
     assert result.hook == "Un record vient de tomber !"
-    assert result.on_screen_texte == "RECORD BATTU"
-    assert result.visual_ideas == ["Zoom sur le compteur de vues", "Archives du clip"]
-    assert result.caption_seo.hashtags == ["#kpop", "#kpopnews"]
+    assert result.paragraph_detail == "Le clip a franchi un nouveau palier de vues en 24h."
+    assert result.hashtags == ["#kpop", "#kpopnews"]
     assert tokens_in == 100
     assert tokens_out == 42
-    # Prompt bien distinct de celui du tweet — règle "aucun emoji" propre au script TikTok.
-    assert "aucun emoji" in captured_prompts[0].lower()
+    # Prompt bien distinct de celui du tweet — format scroll-stopper propre à ce salon.
+    assert "scroll" in captured_prompts[0].lower()
+    assert "Groupe X" in captured_prompts[0]
     assert "COMEBACK_SORTIE" in captured_prompts[0]
     assert "ELEVE" in captured_prompts[0]
 
 
-def test_write_tiktok_script_gere_une_viralite_absente(gemini, monkeypatch, make_article):
+def test_write_instagram_news_gere_une_viralite_absente(gemini, monkeypatch, make_article):
     """En pratique, une ClassificationResult valide a toujours une viralité non-nulle hors
     BRUIT_INUTILE (voir le validator dans models.py) — mais le formatage du prompt doit rester
     sûr si ce champ était un jour None, sans lever d'exception."""
@@ -530,11 +632,10 @@ def test_write_tiktok_script_gere_une_viralite_absente(gemini, monkeypatch, make
         return _FakeResponse(
             {
                 "hook": "Accroche.",
-                "on_screen_texte": "TEXTE",
-                "script_body": "Corps.",
-                "closing_hook": "Chute.",
-                "visual_ideas": ["Idée 1"],
-                "caption_seo": {"legende": "Légende.", "hashtags": ["#kpop"]},
+                "paragraph_context": "Contexte.",
+                "paragraph_detail": "Détail.",
+                "engagement_question": "Une question ?",
+                "hashtags": ["#kpop", "#comeback"],
             }
         )
 
@@ -544,8 +645,39 @@ def test_write_tiktok_script_gere_une_viralite_absente(gemini, monkeypatch, make
     classification = ClassificationResult(
         category=Category.CONCERT_EVENEMENT_FRANCE, importance=Importance.MAJEUR, artists=[]
     ).model_copy(update={"virality": None})  # contourne le validator, cas normalement inatteignable
-    gemini.write_tiktok_script(make_article(), classification)
+    gemini.write_instagram_news(make_article(), classification)
     assert "N/A" in captured_prompts[0]
+
+
+def test_write_instagram_news_injecte_le_contexte_de_page_si_fourni(
+    gemini, monkeypatch, make_article
+):
+    captured_prompts: list[str] = []
+
+    def _fake_generate(*, model, contents, config):
+        captured_prompts.append(config.system_instruction)
+        return _FakeResponse(
+            {
+                "hook": "Accroche.",
+                "paragraph_context": "Contexte.",
+                "paragraph_detail": "Détail.",
+                "engagement_question": "Une question ?",
+                "hashtags": ["#kpop", "#comeback"],
+            }
+        )
+
+    monkeypatch.setattr(gemini._clients[0].models, "generate_content", _fake_generate)
+    from kpop_bot.models import ClassificationResult, Importance
+
+    classification = ClassificationResult(
+        category=Category.COMEBACK_SORTIE, importance=Importance.MODERE, artists=[]
+    )
+    gemini.write_instagram_news(
+        make_article(),
+        classification,
+        page_text="Le membre Jane du groupe X a confirmé son retour en solo.",
+    )
+    assert "Jane" in captured_prompts[0]
 
 
 # --- Throttling RPM : horloge simulée, aucune vraie attente. ---

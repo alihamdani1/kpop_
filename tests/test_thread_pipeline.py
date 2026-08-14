@@ -42,7 +42,7 @@ def settings(tmp_path: Path) -> Settings:
         discord_webhook_route_b="https://discord.com/api/webhooks/fake/b",
         discord_webhook_concert=None,
         discord_webhook_info_a_verifier=None,
-        discord_webhook_tiktok=None,
+        discord_webhook_instagram_news=None,
         discord_bot_token=None,
         discord_thread_channel_id=None,
         discord_webhook_thread=None,
@@ -69,7 +69,7 @@ def test_gemini_utilise_la_chaine_de_modeles_dediee_aux_threads(settings):
 
 def test_thread_api_keys_priorise_la_2e_cle_api_si_presente():
     """Demande explicite : les appels threads passent en priorité sur la 2e clé API — même
-    principe que _tiktok_api_keys (T14), liste de clés inversée."""
+    principe que _instagram_news_api_keys (T14/T18), liste de clés inversée."""
     settings = Settings(
         gemini_api_key="cle-1",
         gemini_api_key_2="cle-2",

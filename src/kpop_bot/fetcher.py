@@ -21,11 +21,14 @@ logger = logging.getLogger(__name__)
 
 _TRACKING_PREFIXES = ("utm_",)
 _TAG_RE = re.compile(r"<[^>]+>")
+_IMG_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.IGNORECASE)
 
 # Certains sites (Yonhap, allkpop) rejettent les User-Agent par défaut des bibliothèques HTTP.
 # En-têtes de navigateur standards pour paraître légitime — pas une garantie contre une
 # protection plus poussée (challenge JS, fingerprinting), seulement contre un filtre naïf.
-_BROWSER_HEADERS = {
+# Public (pas de préfixe _) : réutilisé par scraper.py (T17) pour la même raison, sur les mêmes
+# sources — inutile de dupliquer une 2e liste d'en-têtes.
+BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -81,11 +84,46 @@ def _entry_published_at(entry: feedparser.FeedParserDict) -> dt.datetime:
     return dt.datetime(*struct[:6], tzinfo=dt.UTC)
 
 
+def _first_media_url(entries: list[dict] | None) -> str | None:
+    for entry in entries or []:
+        url = entry.get("url")
+        if url:
+            return url
+    return None
+
+
+def _extract_image_url(entry: feedparser.FeedParserDict) -> str | None:
+    """Image d'illustration de l'article, pour le visuel social 9:16 (voir social_pipeline.py).
+    Essayée dans cet ordre : media:content, media:thumbnail, enclosure (type image/*), premier
+    <img> du HTML brut du résumé/contenu (avant le passage par `_strip_html`, appliqué séparément
+    pour `raw_summary`). Aucune de ces sources ne lève — None si rien d'exploitable, le pipeline
+    de visuels se rabat alors sur la bibliothèque interne (media_library.py)."""
+    url = _first_media_url(entry.get("media_content"))
+    if url:
+        return url
+    url = _first_media_url(entry.get("media_thumbnail"))
+    if url:
+        return url
+    for enclosure in entry.get("enclosures", []) or []:
+        if str(enclosure.get("type", "")).startswith("image/"):
+            enclosure_url = enclosure.get("href") or enclosure.get("url")
+            if enclosure_url:
+                return enclosure_url
+
+    html_blobs = [entry.get("summary", "")]
+    html_blobs.extend(block.get("value", "") for block in entry.get("content") or [])
+    for blob in html_blobs:
+        match = _IMG_SRC_RE.search(blob or "")
+        if match:
+            return match.group(1)
+    return None
+
+
 def fetch_source(source: Source, *, timeout: float) -> list[FetchedItem]:
     """Récupère et normalise les items d'une seule source. Lève en cas d'échec réseau ou de
     flux vide — à l'appelant (`fetch_all`) de journaliser et de passer à la source suivante."""
     response = httpx.get(
-        source.url, timeout=timeout, follow_redirects=True, headers=_BROWSER_HEADERS
+        source.url, timeout=timeout, follow_redirects=True, headers=BROWSER_HEADERS
     )
     response.raise_for_status()
     parsed = feedparser.parse(response.content)
@@ -113,6 +151,7 @@ def fetch_source(source: Source, *, timeout: float) -> list[FetchedItem]:
                 published_at=_entry_published_at(entry),
                 raw_summary=raw_summary,
                 fingerprint=compute_fingerprint(url),
+                image_url=_extract_image_url(entry),
             )
         )
     return items

@@ -7,7 +7,7 @@ import httpx
 import pytest
 import respx
 
-from kpop_bot import analyzer, storage
+from kpop_bot import analyzer, scraper, storage
 from kpop_bot.models import (
     TWEET_TAG_LABELS,
     ArticleStatus,
@@ -15,14 +15,13 @@ from kpop_bot.models import (
     ClassificationResult,
     FetchedItem,
     Importance,
+    InstagramNewsPost,
     Route,
-    TikTokCaptionSeo,
-    TikTokScriptResult,
     TweetTag,
     Virality,
     WritingResult,
 )
-from kpop_bot.pipeline import _tiktok_api_keys, resend_sent, run_cycle
+from kpop_bot.pipeline import _instagram_news_api_keys, resend_sent, run_cycle
 from kpop_bot.settings import Settings
 
 
@@ -30,8 +29,8 @@ from kpop_bot.settings import Settings
 def settings(tmp_path: Path) -> Settings:
     """Tous les champs optionnels sont explicités (même à None) pour rester isolé d'un vrai
     `.env` local qui les définirait — sinon un test peut silencieusement déclencher un vrai
-    appel réseau (voir T14 : `DISCORD_WEBHOOK_TIKTOK` dans `.env` a fait échouer un test qui
-    ne s'y attendait pas, faute de cette isolation explicite)."""
+    appel réseau (voir T14 : `DISCORD_WEBHOOK_INSTAGRAM_NEWS` dans `.env` a fait échouer un
+    test qui ne s'y attendait pas, faute de cette isolation explicite)."""
     return Settings(
         gemini_api_key="test-key",
         gemini_api_key_2=None,
@@ -39,9 +38,18 @@ def settings(tmp_path: Path) -> Settings:
         discord_webhook_route_b="https://discord.com/api/webhooks/fake/b",
         discord_webhook_concert=None,
         discord_webhook_info_a_verifier=None,
-        discord_webhook_tiktok=None,
+        discord_webhook_instagram_news=None,
         db_path=tmp_path / "test.db",
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_scraping(monkeypatch):
+    """Neutralise le scraping de page (T18) par défaut dans tous ces tests — même principe que
+    l'isolation des webhooks ci-dessus : un test ne doit jamais déclencher un vrai appel
+    réseau. Un test dédié à l'intégration du scraping le réactive explicitement (monkeypatch
+    local, qui prime sur celui-ci)."""
+    monkeypatch.setattr(scraper, "fetch_article_page", lambda url, *, timeout: None)
 
 
 def _seed_sent_article(settings: Settings, *, route: Route) -> None:
@@ -124,12 +132,16 @@ def test_run_cycle_prefixe_le_tag_derive_sur_le_tweet_envoye(settings, tmp_path,
     monkeypatch.setattr(
         analyzer.GeminiAnalyzer,
         "classify",
-        lambda self, item, *, france_flag, milestone_flag=False: (classification, 10, 5),
+        lambda self, item, *, france_flag, milestone_flag=False, page_text=None: (
+            classification,
+            10,
+            5,
+        ),
     )
     monkeypatch.setattr(
         analyzer.GeminiAnalyzer,
         "write",
-        lambda self, item, classification, route: (writing, 3, 2),
+        lambda self, item, classification, route, *, page_text=None: (writing, 3, 2),
     )
     respx.post(settings.discord_webhook_route_b).mock(return_value=httpx.Response(204))
 
@@ -175,7 +187,7 @@ def test_run_cycle_calcule_et_transmet_le_flag_milestone(settings, tmp_path, mon
 
     captured_flags: dict[str, bool] = {}
 
-    def _fake_classify(self, item, *, france_flag, milestone_flag=False):
+    def _fake_classify(self, item, *, france_flag, milestone_flag=False, page_text=None):
         captured_flags["milestone_flag"] = milestone_flag
         classification = ClassificationResult(
             category=Category.COMEBACK_SORTIE,
@@ -190,7 +202,7 @@ def test_run_cycle_calcule_et_transmet_le_flag_milestone(settings, tmp_path, mon
     monkeypatch.setattr(
         analyzer.GeminiAnalyzer,
         "write",
-        lambda self, item, classification, route: (
+        lambda self, item, classification, route, *, page_text=None: (
             WritingResult(summary_fr="Résumé.", tweet_draft="Un tweet."),
             3,
             2,
@@ -240,7 +252,11 @@ def test_run_cycle_envoie_les_articles_filtres_vers_info_a_verifier(
     monkeypatch.setattr(
         analyzer.GeminiAnalyzer,
         "classify",
-        lambda self, item, *, france_flag, milestone_flag=False: (classification, 10, 5),
+        lambda self, item, *, france_flag, milestone_flag=False, page_text=None: (
+            classification,
+            10,
+            5,
+        ),
     )
     review_mock = respx.post(review_url).mock(return_value=httpx.Response(204))
 
@@ -296,7 +312,11 @@ def test_run_cycle_sans_webhook_verif_laisse_les_articles_filtres_intacts(
     monkeypatch.setattr(
         analyzer.GeminiAnalyzer,
         "classify",
-        lambda self, item, *, france_flag, milestone_flag=False: (classification, 10, 5),
+        lambda self, item, *, france_flag, milestone_flag=False, page_text=None: (
+            classification,
+            10,
+            5,
+        ),
     )
 
     stats = run_cycle(settings, limit=10, dry_run=False)
@@ -309,17 +329,18 @@ def test_run_cycle_sans_webhook_verif_laisse_les_articles_filtres_intacts(
     assert record.category == Category.BRUIT_INUTILE
 
 
-# --- T14 : script TikTok dédié (Route A uniquement), clé 2 en priorité, salon séparé. ---
+# --- T18 (remplace T14) : post Instagram dédié (Route A/CONCERT), clé 2 en priorité, salon
+# séparé. ---
 
 
-def test_tiktok_api_keys_inverse_l_ordre_si_2e_cle_presente(settings):
+def test_instagram_news_api_keys_inverse_l_ordre_si_2e_cle_presente(settings):
     s = settings.model_copy(update={"gemini_api_key": "clé-1", "gemini_api_key_2": "clé-2"})
-    assert _tiktok_api_keys(s) == ["clé-2", "clé-1"]
+    assert _instagram_news_api_keys(s) == ["clé-2", "clé-1"]
 
 
-def test_tiktok_api_keys_sans_2e_cle_ne_contient_que_la_premiere(settings):
+def test_instagram_news_api_keys_sans_2e_cle_ne_contient_que_la_premiere(settings):
     s = settings.model_copy(update={"gemini_api_key": "clé-1", "gemini_api_key_2": None})
-    assert _tiktok_api_keys(s) == ["clé-1"]
+    assert _instagram_news_api_keys(s) == ["clé-1"]
 
 
 def _seed_two_articles(settings: Settings) -> None:
@@ -349,7 +370,7 @@ def _seed_two_articles(settings: Settings) -> None:
     conn.close()
 
 
-def _fake_classify_route_a_ou_b(self, item, *, france_flag, milestone_flag=False):
+def _fake_classify_route_a_ou_b(self, item, *, france_flag, milestone_flag=False, page_text=None):
     if item.url.endswith("route-a"):
         classification = ClassificationResult(
             category=Category.CONCERT_EVENEMENT_FRANCE,
@@ -369,38 +390,39 @@ def _fake_classify_route_a_ou_b(self, item, *, france_flag, milestone_flag=False
     return classification, 10, 5
 
 
-def _fake_write(self, item, classification, route):
+def _fake_write(self, item, classification, route, *, page_text=None):
     return WritingResult(summary_fr="Résumé.", tweet_draft="Un tweet."), 3, 2
 
 
 @respx.mock
-def test_run_cycle_genere_le_script_tiktok_uniquement_pour_route_a(settings, tmp_path, monkeypatch):
+def test_run_cycle_genere_le_post_instagram_uniquement_pour_route_a(
+    settings, tmp_path, monkeypatch
+):
     sources_path = tmp_path / "sources.yaml"
     sources_path.write_text("sources: []\n", encoding="utf-8")
     artist_tiers_path = tmp_path / "artist_tiers.yaml"
     artist_tiers_path.write_text("{}\n", encoding="utf-8")
-    tiktok_url = "https://discord.com/api/webhooks/fake/tiktok"
+    instagram_url = "https://discord.com/api/webhooks/fake/instagram"
     settings = settings.model_copy(
         update={
             "sources_path": sources_path,
             "artist_tiers_path": artist_tiers_path,
-            "discord_webhook_tiktok": tiktok_url,
+            "discord_webhook_instagram_news": instagram_url,
         }
     )
     _seed_two_articles(settings)
 
-    tiktok_calls: list[str] = []
+    instagram_calls: list[str] = []
 
-    def _fake_write_tiktok(self, item, classification):
-        tiktok_calls.append(item.url)
+    def _fake_write_instagram_news(self, item, classification, *, page_text=None):
+        instagram_calls.append(item.url)
         return (
-            TikTokScriptResult(
+            InstagramNewsPost(
                 hook="H.",
-                on_screen_texte="T.",
-                script_body="B.",
-                closing_hook="C.",
-                visual_ideas=["Idée"],
-                caption_seo=TikTokCaptionSeo(legende="L.", hashtags=["#kpop"]),
+                paragraph_context="C.",
+                paragraph_detail="D.",
+                engagement_question="Q ?",
+                hashtags=["#kpop", "#comeback"],
             ),
             5,
             3,
@@ -408,34 +430,34 @@ def test_run_cycle_genere_le_script_tiktok_uniquement_pour_route_a(settings, tmp
 
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "classify", _fake_classify_route_a_ou_b)
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "write", _fake_write)
-    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_tiktok_script", _fake_write_tiktok)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_instagram_news", _fake_write_instagram_news)
     respx.post(settings.discord_webhook_route_a).mock(return_value=httpx.Response(204))
     respx.post(settings.discord_webhook_route_b).mock(return_value=httpx.Response(204))
-    respx.post(tiktok_url).mock(return_value=httpx.Response(204))
+    respx.post(instagram_url).mock(return_value=httpx.Response(204))
 
     stats = run_cycle(settings, limit=10, dry_run=False)
 
-    assert tiktok_calls == ["https://www.soompi.com/article/route-a"]
-    assert stats.tiktok_generated == 1
-    assert stats.tiktok_sent == 1
+    assert instagram_calls == ["https://www.soompi.com/article/route-a"]
+    assert stats.instagram_news_generated == 1
+    assert stats.instagram_news_sent == 1
 
 
 @respx.mock
-def test_run_cycle_echec_generation_tiktok_n_empeche_pas_l_envoi_principal(
+def test_run_cycle_echec_generation_instagram_news_n_empeche_pas_l_envoi_principal(
     settings, tmp_path, monkeypatch
 ):
-    """Un script TikTok raté est un bonus perdu, pas une raison de marquer l'article FAILED
-    ni d'arrêter le cycle — voir T14."""
+    """Un post Instagram raté est un bonus perdu, pas une raison de marquer l'article FAILED
+    ni d'arrêter le cycle — même principe qu'en T14."""
     sources_path = tmp_path / "sources.yaml"
     sources_path.write_text("sources: []\n", encoding="utf-8")
     artist_tiers_path = tmp_path / "artist_tiers.yaml"
     artist_tiers_path.write_text("{}\n", encoding="utf-8")
-    tiktok_url = "https://discord.com/api/webhooks/fake/tiktok"
+    instagram_url = "https://discord.com/api/webhooks/fake/instagram"
     settings = settings.model_copy(
         update={
             "sources_path": sources_path,
             "artist_tiers_path": artist_tiers_path,
-            "discord_webhook_tiktok": tiktok_url,
+            "discord_webhook_instagram_news": instagram_url,
         }
     )
     conn = storage.init_db(settings.db_path)
@@ -452,25 +474,27 @@ def test_run_cycle_echec_generation_tiktok_n_empeche_pas_l_envoi_principal(
     )
     conn.close()
 
-    def _raise_analysis_error(self, item, classification):
+    def _raise_analysis_error(self, item, classification, *, page_text=None):
         raise analyzer.AnalysisError("boom")
 
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "classify", _fake_classify_route_a_ou_b)
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "write", _fake_write)
-    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_tiktok_script", _raise_analysis_error)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_instagram_news", _raise_analysis_error)
     respx.post(settings.discord_webhook_route_a).mock(return_value=httpx.Response(204))
 
     stats = run_cycle(settings, limit=10, dry_run=False)
 
-    assert stats.tiktok_generation_failed == 1
+    assert stats.instagram_news_generation_failed == 1
     assert stats.analysis_failed == 0  # l'article lui-même n'est pas en échec
-    assert stats.sent == 1  # envoyé normalement malgré l'échec du script TikTok
+    assert stats.sent == 1  # envoyé normalement malgré l'échec du post Instagram
 
 
 @respx.mock
-def test_run_cycle_sans_webhook_tiktok_ne_genere_ni_n_envoie_rien(settings, tmp_path, monkeypatch):
+def test_run_cycle_sans_webhook_instagram_news_ne_genere_ni_n_envoie_rien(
+    settings, tmp_path, monkeypatch
+):
     """Comportement par défaut (webhook non configuré) inchangé : aucun 3e appel Gemini,
-    aucun envoi vers un salon TikTok — voir T14."""
+    aucun envoi vers un salon Instagram — même principe qu'en T14."""
     sources_path = tmp_path / "sources.yaml"
     sources_path.write_text("sources: []\n", encoding="utf-8")
     artist_tiers_path = tmp_path / "artist_tiers.yaml"
@@ -479,21 +503,134 @@ def test_run_cycle_sans_webhook_tiktok_ne_genere_ni_n_envoie_rien(settings, tmp_
         update={
             "sources_path": sources_path,
             "artist_tiers_path": artist_tiers_path,
-            "discord_webhook_tiktok": None,
+            "discord_webhook_instagram_news": None,
         }
     )
     _seed_two_articles(settings)
 
-    def _fail_if_called(self, item, classification):
-        pytest.fail("write_tiktok_script ne doit jamais être appelé sans webhook configuré")
+    def _fail_if_called(self, item, classification, *, page_text=None):
+        pytest.fail("write_instagram_news ne doit jamais être appelé sans webhook configuré")
 
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "classify", _fake_classify_route_a_ou_b)
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "write", _fake_write)
-    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_tiktok_script", _fail_if_called)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_instagram_news", _fail_if_called)
     respx.post(settings.discord_webhook_route_a).mock(return_value=httpx.Response(204))
     respx.post(settings.discord_webhook_route_b).mock(return_value=httpx.Response(204))
 
     stats = run_cycle(settings, limit=10, dry_run=False)
 
-    assert stats.tiktok_generated == 0
-    assert stats.tiktok_sent == 0
+    assert stats.instagram_news_generated == 0
+    assert stats.instagram_news_sent == 0
+
+
+# --- T18 : scraping best-effort de la page article, avant classify(). ---
+
+
+@respx.mock
+def test_run_cycle_transmet_le_texte_scrape_a_classify_et_write(settings, tmp_path, monkeypatch):
+    """Le texte scrapé (T18) doit être transmis tel quel aux deux appels — c'est ce qui permet
+    de nommer précisément un artiste absent du titre/extrait RSS."""
+    sources_path = tmp_path / "sources.yaml"
+    sources_path.write_text("sources: []\n", encoding="utf-8")
+    artist_tiers_path = tmp_path / "artist_tiers.yaml"
+    artist_tiers_path.write_text("{}\n", encoding="utf-8")
+    settings = settings.model_copy(
+        update={"sources_path": sources_path, "artist_tiers_path": artist_tiers_path}
+    )
+    conn = storage.init_db(settings.db_path)
+    storage.insert_new_article(
+        conn,
+        FetchedItem(
+            source="Soompi",
+            title="Petite actu",
+            url="https://www.soompi.com/article/scrape",
+            published_at=dt.datetime(2026, 7, 24, tzinfo=dt.UTC),
+            raw_summary="",
+            fingerprint="fp-scrape",
+        ),
+    )
+    conn.close()
+
+    monkeypatch.setattr(
+        scraper,
+        "fetch_article_page",
+        lambda url, *, timeout: scraper.ScrapedArticle(
+            text="Le membre Jane du groupe X a confirmé son retour en solo.",
+            main_image_url="https://www.soompi.com/main.jpg",
+            extra_image_urls=["https://www.soompi.com/extra.jpg"],
+        ),
+    )
+
+    captured: dict[str, str | None] = {}
+
+    def _fake_classify(self, item, *, france_flag, milestone_flag=False, page_text=None):
+        captured["classify_page_text"] = page_text
+        return (
+            ClassificationResult(
+                category=Category.COMEBACK_SORTIE,
+                importance=Importance.MODERE,
+                virality=Virality.FAIBLE,
+                virality_reason="Test.",
+                artists=["Groupe X"],
+            ),
+            10,
+            5,
+        )
+
+    def _fake_write(self, item, classification, route, *, page_text=None):
+        captured["write_page_text"] = page_text
+        return WritingResult(summary_fr="Résumé.", tweet_draft="Un tweet."), 3, 2
+
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "classify", _fake_classify)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write", _fake_write)
+    respx.post(settings.discord_webhook_route_b).mock(return_value=httpx.Response(204))
+
+    stats = run_cycle(settings, limit=10, dry_run=False)
+
+    assert stats.scraped_pages == 1
+    expected_text = "Le membre Jane du groupe X a confirmé son retour en solo."
+    assert captured["classify_page_text"] == expected_text
+    assert captured["write_page_text"] == expected_text
+    conn = storage.init_db(settings.db_path)
+    [record] = storage.pending(conn, ArticleStatus.SENT)
+    conn.close()
+    assert record.image_url == "https://www.soompi.com/main.jpg"
+    assert record.extra_image_urls == ["https://www.soompi.com/extra.jpg"]
+
+
+@respx.mock
+def test_run_cycle_sans_page_exploitable_continue_avec_le_seul_extrait_rss(
+    settings, tmp_path, monkeypatch
+):
+    """Le scraping est best-effort — `None` (page injoignable ou sans texte exploitable) ne
+    doit jamais bloquer le cycle, seulement laisser page_text/image_url absents."""
+    sources_path = tmp_path / "sources.yaml"
+    sources_path.write_text("sources: []\n", encoding="utf-8")
+    artist_tiers_path = tmp_path / "artist_tiers.yaml"
+    artist_tiers_path.write_text("{}\n", encoding="utf-8")
+    settings = settings.model_copy(
+        update={"sources_path": sources_path, "artist_tiers_path": artist_tiers_path}
+    )
+    conn = storage.init_db(settings.db_path)
+    storage.insert_new_article(
+        conn,
+        FetchedItem(
+            source="Soompi",
+            title="Petite actu",
+            url="https://www.soompi.com/article/no-scrape",
+            published_at=dt.datetime(2026, 7, 24, tzinfo=dt.UTC),
+            raw_summary="",
+            fingerprint="fp-no-scrape",
+        ),
+    )
+    conn.close()
+    # La fixture _no_scraping (autouse) renvoie déjà None — pas de monkeypatch supplémentaire.
+
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "classify", _fake_classify_route_a_ou_b)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write", _fake_write)
+    respx.post(settings.discord_webhook_route_b).mock(return_value=httpx.Response(204))
+
+    stats = run_cycle(settings, limit=10, dry_run=False)
+
+    assert stats.scraped_pages == 0
+    assert stats.sent == 1

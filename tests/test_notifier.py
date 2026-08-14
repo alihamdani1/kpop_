@@ -22,19 +22,19 @@ from kpop_bot.notifier import (
     NotificationError,
     build_embed,
     build_info_header,
+    build_instagram_news_embed,
+    build_instagram_news_header,
+    build_instagram_news_message,
     build_review_message,
     build_thread_intro_message,
     build_thread_selection_embed,
     build_thread_tweet_header,
-    build_tiktok_embed,
-    build_tiktok_script_header,
-    build_tiktok_script_message,
     build_tweet_header,
     notify,
+    notify_instagram_news,
     notify_review,
     notify_thread,
     notify_thread_selection,
-    notify_tiktok,
     send_embed,
     send_message,
     send_message_with_image,
@@ -204,70 +204,62 @@ def test_notify_review_envoie_un_seul_message(make_article):
     assert route.call_count == 1
 
 
-# --- Salon dédié aux scripts TikTok (T14) : Route A uniquement, en plus de #actus-videos. ---
+# --- Salon dédié au post Instagram "actu/breaking news" (T18, remplace le script TikTok de
+# T14) : Route A et Route CONCERT, en plus de #actus-videos. ---
 
 
-def test_build_tiktok_embed_contient_score_resume_et_idees(make_article):
+def test_build_instagram_news_embed_contient_score_et_resume(make_article):
     article = make_article(
         route=Route.A,
         virality=Virality.ELEVE,
         video_summary="Résumé détaillé déjà généré pour la vidéo.",
-        tiktok_visual_ideas=["Zoom sur le clip", "Texte à l'écran avec le chiffre clé"],
     )
-    embed = build_tiktok_embed(article)
+    embed = build_instagram_news_embed(article)
     field_names = [f["name"] for f in embed["fields"]]
     assert "Score de viralité" in field_names
     assert "Résumé détaillé" in field_names
-    assert "💡 Idées de montage" in field_names
-    ideas_field = next(f for f in embed["fields"] if f["name"] == "💡 Idées de montage")
-    assert "Zoom sur le clip" in ideas_field["value"]
-    assert "Texte à l'écran avec le chiffre clé" in ideas_field["value"]
 
 
-def test_build_tiktok_script_header_est_fixe():
-    assert build_tiktok_script_header() == "# Script TikTok"
+def test_build_instagram_news_header_est_fixe():
+    assert build_instagram_news_header() == "# Post Instagram"
 
 
-def test_build_tiktok_script_message_contient_tous_les_champs(make_article):
+def test_build_instagram_news_message_contient_tous_les_champs(make_article):
     article = make_article(
-        tiktok_hook="Un record vient de tomber !",
-        tiktok_on_screen_texte="RECORD BATTU",
-        tiktok_script_body="Le groupe X a franchi un nouveau palier de vues.",
-        tiktok_closing_hook="Vous vous y attendiez ?",
-        tiktok_caption_legende="Un record vient de tomber",
-        tiktok_caption_hashtags=["#kpop", "#kpopnews"],
+        instagram_hook="Un record vient de tomber !",
+        instagram_paragraph_context="Le groupe X a confirmé son retour.",
+        instagram_paragraph_detail="Le clip a franchi un nouveau palier de vues.",
+        instagram_engagement_question="Vous vous y attendiez ?",
+        instagram_hashtags=["#kpop", "#kpopnews"],
     )
-    message = build_tiktok_script_message(article)
+    message = build_instagram_news_message(article)
     assert "Un record vient de tomber !" in message
-    assert "RECORD BATTU" in message
-    assert "Le groupe X a franchi un nouveau palier de vues." in message
+    assert "Le groupe X a confirmé son retour." in message
+    assert "Le clip a franchi un nouveau palier de vues." in message
     assert "Vous vous y attendiez ?" in message
-    assert "Un record vient de tomber" in message
     assert "#kpop #kpopnews" in message
 
 
 @respx.mock
-def test_notify_tiktok_envoie_quatre_messages_dans_l_ordre(make_article):
-    url = "https://discord.com/api/webhooks/fake/tiktok"
+def test_notify_instagram_news_envoie_quatre_messages_dans_l_ordre(make_article):
+    url = "https://discord.com/api/webhooks/fake/instagram"
     mock = respx.post(url).mock(return_value=httpx.Response(204))
     article = make_article(
         route=Route.A,
         virality=Virality.ELEVE,
-        tiktok_hook="Accroche.",
-        tiktok_on_screen_texte="TEXTE.",
-        tiktok_script_body="Corps.",
-        tiktok_closing_hook="Chute.",
-        tiktok_visual_ideas=["Idée 1"],
-        tiktok_caption_legende="Légende.",
-        tiktok_caption_hashtags=["#kpop"],
+        instagram_hook="Accroche.",
+        instagram_paragraph_context="Contexte.",
+        instagram_paragraph_detail="Détail.",
+        instagram_engagement_question="Une question ?",
+        instagram_hashtags=["#kpop"],
     )
-    notify_tiktok(article, url=url, timeout=5.0, index=1)
+    notify_instagram_news(article, url=url, timeout=5.0, index=1)
 
     assert mock.call_count == 4
     bodies = [json.loads(call.request.content) for call in mock.calls]
     assert bodies[0] == {"content": "# INFO 1"}
     assert "embeds" in bodies[1]
-    assert bodies[2] == {"content": "# Script TikTok"}
+    assert bodies[2] == {"content": "# Post Instagram"}
     assert "Accroche." in bodies[3]["content"]
 
 

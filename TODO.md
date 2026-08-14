@@ -959,6 +959,205 @@ tweets) — 209 tests au vert, `ruff` propre.
 
 ---
 
+### ✅ T17 — Visuel social 9:16 (RSS image + tweet → Discord privé) — FAIT, en attente de test réel
+
+**Demande** : étendre la diffusion vers TikTok/Instagram sans dépendre d'un outil tiers payant.
+Générer automatiquement, pour chaque tweet déjà produit par le pipeline, un visuel vertical 9:16
+(image de l'article en haut sur fond sombre, tweet lisible en bas, style « HugoDécrypte »), et le
+déposer avec son texte sur un salon Discord privé pour relecture avant publication manuelle — même
+logique human-in-the-loop que le reste du projet (aucune publication automatique sur les réseaux).
+
+**Décisions d'architecture** (validées avec l'utilisateur avant implémentation) :
+- **Rendu HTML/CSS via Chromium headless (Playwright)**, pas une composition raster (Pillow) —
+  choisi pour obtenir gratuitement, via CSS (`object-fit: cover`, flexbox), un rendu responsive
+  qui ne déforme jamais l'image source ni ne fait déborder un texte de longueur variable. Coût
+  assumé : ~300 Mo de navigateur à installer en CI, la dépendance la plus lourde du projet.
+- **Pipeline séparé** (`social_pipeline.py`) + **workflow GitHub Actions dédié**
+  (`social_visuals.yml`), sur le même modèle que les threads (T15) — isole le cœur du pipeline
+  articles déjà en production (cron 15 min) du poids de Chromium. Aucune modification de
+  `pipeline.py`/`run_cycle`.
+- **Portée** : Route A + B + Concert (tout article `SENT`), pas seulement Route A.
+- **Repli image** : image du flux RSS de l'article en priorité (nouvelle extraction dans
+  `fetcher.py`) ; si absente ou inexploitable, repli sur la bibliothèque interne `media_library.py`
+  (T16, nouvelle fonction `select_image_for_article`) ; si les deux échouent, aucun visuel pour cet
+  article — dégradation gracieuse, principe déjà appliqué partout ailleurs dans ce projet.
+- **Texte** : réutilise `tweet_draft` déjà stocké (tag + accroche inclus) — aucun appel Gemini
+  supplémentaire.
+
+**Extraction de l'image RSS** (`fetcher._extract_image_url`, nouveau) : essayée dans cet ordre —
+`media:content`, `media:thumbnail`, `enclosure` de type `image/*`, premier `<img>` du HTML brut du
+résumé (avant `_strip_html`). Aucune source ne lève ; `None` si rien trouvé. Nouveau champ
+`FetchedItem.image_url` / colonne `articles.image_url`.
+
+**Modèle de données** — 2 colonnes migrées sur `articles` (même mécanisme idempotent que les
+colonnes `tiktok_*`, T14) :
+- `image_url` — alimentée à la collecte, jamais réécrite ensuite.
+- `social_visual_sent_at` — évite de régénérer/renvoyer le même visuel à chaque cycle.
+
+**Point d'attention propre à ce projet, corrigé avant mise en prod** : `data/kpop.db` est une
+vraie base avec des centaines d'articles déjà `SENT`. Sans précaution, l'ajout de
+`social_visual_sent_at` les aurait tous laissés à `NULL` → le premier run aurait inondé le salon
+Discord de visuels rétroactifs. **Backfill exécuté une seule fois**, dans le même bloc qui crée la
+colonne (`storage._migrate_social_visual_columns`) : `social_visual_sent_at = sent_at` pour tout
+article déjà `SENT` au moment de la migration — seuls les envois *postérieurs* au déploiement
+deviennent candidats. Couvert par test (`test_migrate_social_visual_columns_backfill_...`).
+
+**Rendu** (`src/kpop_bot/visual_generator.py`, nouveau) :
+- `templates/social_post.html` (nouveau, Jinja2, top-level comme `config/`) : viewport fixe
+  1080×1920. Image en `object-fit: cover` (~58 % de la hauteur) + dégradé CSS qui la fond dans le
+  fond sombre (`#0b0b0f`) plutôt qu'une coupe nette. Image intégrée en `data:` URI (pas de fichier
+  temporaire pour la source).
+- Taille de police **calculée en Python** (`_font_size_class`, 3 paliers selon la longueur du
+  tweet), pas laissée à un `clamp()` CSS seul — garantit qu'un tweet proche de la limite de 260
+  caractères ne déborde jamais, cohérent avec la préférence du projet pour la logique en code
+  plutôt que la magie client (aucun JS nulle part dans ce projet, et ça continue).
+- `build_html()` : rendu Jinja2 pur (`autoescape=True`), testable sans navigateur.
+- `SocialVisualRenderer` : **un seul navigateur Chromium lancé pour tout un batch** d'articles
+  (context manager), pas un par article — coût de lancement non négligeable.
+- `download_image()` : téléchargement défensif (statut 200, `Content-Type` `image/*`, plafond
+  10 Mo) — `None` sur tout échec, jamais une exception qui interromprait le run.
+
+**Orchestration** (`social_pipeline.run_social_visuals`) : no-op si `discord_webhook_social` non
+configuré (même pattern que `discord_webhook_tiktok`/`discord_webhook_concert`/
+`discord_webhook_info_a_verifier`). Sinon : sélectionne les articles `SENT` sans visuel
+(`storage.pending_social_visuals`, plafonné par `social_visual_batch_limit`, défaut 20), résout
+l'image (RSS → media_library → skip), rend le PNG, l'envoie via `notifier.notify_social_visual`
+(réutilise `send_message_with_image`, T16, sans modification) puis marque l'article. **Chaque
+étape est non bloquante** — un échec de rendu ou d'envoi sur un article n'interrompt jamais le
+traitement des suivants (même philosophie que le script TikTok, T14).
+
+**Configuration** (`settings.py`) : `discord_webhook_social` (optionnel, absent = fonctionnalité
+inactive), `social_visual_template_path` (défaut `templates/social_post.html`),
+`social_visual_batch_limit` (défaut 20).
+
+**CLI** : nouvelle sous-commande `python -m kpop_bot social-visuals [--dry-run]`.
+
+**Workflow** (`.github/workflows/social_visuals.yml`, nouveau) : cron 15 min, même
+`concurrency: group: pipeline-run` que les workflows existants (évite une course sur le commit de
+`data/kpop.db`). Installation de Chromium mise en cache (`actions/cache` sur
+`~/.cache/ms-playwright`) pour ne pas retélécharger ~300 Mo à chaque run.
+
+**Fichiers concernés** : `models.py` (`FetchedItem.image_url`, `ArticleRecord.image_url`/
+`social_visual_sent_at`), `storage.py` (migration + backfill, `pending_social_visuals`,
+`mark_social_visual_sent`), `fetcher.py` (`_extract_image_url`), `media_library.py`
+(`select_image_for_article`), `visual_generator.py` **(nouveau)**, `social_pipeline.py`
+**(nouveau)**, `notifier.py` (`notify_social_visual`), `settings.py`, `__main__.py`,
+`templates/social_post.html` **(nouveau)**, `pyproject.toml` (+`jinja2`, `+playwright`),
+`.github/workflows/social_visuals.yml` **(nouveau)**.
+
+**Restant à faire (côté utilisateur)** : créer le salon Discord privé + son webhook, ajouter
+`DISCORD_WEBHOOK_SOCIAL` comme secret GitHub Actions (et en local dans `.env` pour tester avant).
+Sans ce secret, le mécanisme reste inactif, comme toutes les fonctionnalités à webhook optionnel
+de ce projet.
+
+**Fait quand** : tests sur l'extraction d'image RSS (4 sources + repli, `test_fetcher.py`), sur la
+migration + le backfill (`test_storage.py`), sur `select_image_for_article`
+(`test_media_library.py`), sur `build_html`/`_font_size_class`/`download_image`
+(`test_visual_generator.py`), sur l'orchestration bout en bout mockée — chaîne de repli image,
+échecs non bloquants, no-op sans webhook, plafond de lot (`test_social_pipeline.py`) — 251 tests
+au vert, `ruff` propre. **✔️ Rendu réel vérifié hors suite de tests** (Chromium installé localement,
+`SocialVisualRenderer` exercé pour de vrai sur un exemple : PNG 1080×1920 généré, dégradé et mise
+en page conformes). **Pas encore observé en conditions réelles bout en bout** (téléchargement d'une
+vraie image RSS + envoi Discord réel) — nécessite le webhook `DISCORD_WEBHOOK_SOCIAL` ci-dessus.
+
+### ✅ T18 — Scraping de page article + post Instagram "actu/breaking news" (remplace le script TikTok de T14) — FAIT
+
+**Origine — deux demandes distinctes de l'utilisateur** :
+1. Remplacer le script TikTok (T14) par un texte de post Instagram format « actu/breaking
+   news » — ni un script à l'oral (T14), ni des diapositives de carrousel (une piste explorée
+   puis écartée en cours de discussion).
+2. Un défaut observé sur `tweet_draft` : quand le titre d'un article reste volontairement vague
+   sur l'identité de l'idole/du groupe concerné (titre racoleur), le tweet généré restait tout
+   aussi vague — alors que le nom apparaît parfois dans le corps de l'article, jamais capté par
+   le pipeline (`raw_summary` ne contient que l'extrait RSS, jamais la page elle-même).
+
+**1. Scraping best-effort de la page article** (`scraper.py`, nouveau module) :
+- `httpx.get()` sur `item.url` (mêmes en-têtes navigateur que la collecte RSS, T4 — désormais
+  `fetcher.BROWSER_HEADERS`, rendu public pour être réutilisé) + parsing `BeautifulSoup`
+  (nouvelle dépendance `beautifulsoup4`). Texte extrait des `<p>` sous `<article>`/`<main>` (repli
+  sur la page entière), après retrait des balises de bruit (`nav`, `header`, `footer`, `aside`,
+  `script`, `style`, `form`) — évite de capter un menu ou un pied de page. Tronqué à 4000
+  caractères (coût token maîtrisé).
+- Image principale via `<meta property="og:image">` (repli `twitter:image`) — quasi universel
+  sur les sites d'actu, bien plus fiable qu'un `<img>` choisi au hasard. Les autres `<img>` du
+  corps sont capturés en plus (`extra_image_urls`, nouvelle colonne) — stockés mais **pas encore
+  consommés ailleurs dans le pipeline**, en réponse à la demande « pourquoi pas les autres si
+  possible » ; aucun coût de stockage significatif (juste des URLs), à exploiter plus tard si
+  besoin (ex. images alternatives sur le post Instagram, même principe que T16bis pour les
+  threads).
+- **Best-effort partout, ne lève jamais** : `fetch_article_page()` retourne `None` sur tout échec
+  (réseau, HTML sans paragraphe exploitable) — l'article continue alors avec le seul extrait RSS,
+  exactement comme avant ce module. Même philosophie que le reste du pipeline (une source RSS en
+  échec n'interrompt jamais les autres, T4).
+- **Déclenché après déduplication**, juste avant `classify()`, dans `pipeline.py` — pas à la
+  collecte RSS — pour respecter le principe déjà en place : le coût (une requête HTTP en plus)
+  reste proportionnel aux vraies nouveautés, pas au flux RSS brut.
+- Le texte scrapé (`page_text`) est transmis à **`classify()` et `write()`** (nouveau paramètre
+  optionnel `page_text` sur les deux), avec une instruction explicite de l'utiliser en priorité
+  pour identifier les artistes quand le titre reste vague à leur sujet.
+- L'image principale scrapée devient le 1er choix dans la chaîne de repli déjà en place pour le
+  visuel social (T17) : page article → `image_url` RSS (déjà existant) → bibliothèque interne.
+  Mise à jour via `COALESCE` dans `storage.save_analysis` (`image_url=None` — page non
+  exploitable — ne doit jamais écraser une image déjà connue depuis la collecte RSS).
+
+**2. Fix du tweet qui reste vague** — deux mesures complémentaires, indépendantes du scraping
+ci-dessus (donc actives même quand la page n'est pas exploitable, tant que l'extrait RSS suffit) :
+- `classify()` produit déjà une liste `artists` (entités citées) mais `write()` ne la recevait
+  jamais — corrigé : `_WRITING_SYSTEM_PROMPT` reçoit désormais `{known_artists}` (la liste déjà
+  identifiée par `classify()`) et une consigne explicite : « nomme précisément l'artiste/groupe
+  concerné — ne reste jamais aussi vague qu'un titre racoleur qui ne le citerait pas ». Aucun
+  appel IA supplémentaire, juste une donnée déjà produite qui n'était pas transmise.
+- Le prompt de classification est mis à jour dans le même esprit : si le titre est vague mais
+  qu'un nom apparaît dans l'extrait ou le contexte de page, `classify()` doit quand même le citer
+  dans `artists`.
+
+**3. Post Instagram "scroll-stopper narratif"** (remplace `TikTokScriptResult`/
+`write_tiktok_script`/le script TikTok de T14) :
+- Nouveau schéma `InstagramNewsPost` (`models.py`) : `hook` (accroche forte), `paragraph_context`
+  (contexte), `paragraph_detail` (détails/réactions/enjeu), `engagement_question` (clôture),
+  `hashtags` (2 à 3, **bornés par le schéma Pydantic** `Field(min_length=2, max_length=3)` —
+  contrairement à `TikTokCaptionSeo.hashtags` qui n'imposait rien en code, seulement dans le
+  texte du prompt).
+- Nouveau prompt dédié `_INSTAGRAM_NEWS_SYSTEM_PROMPT` (`analyzer.py`), séparé de celui du tweet
+  — même raison qu'en T14 (un prompt à objectif unique est plus fiable qu'un prompt qui doit
+  réussir deux formats différents sur un modèle *lite*). Reprend les bonnes pratiques déjà
+  validées pour le thread Twitter (T15ter), pas encore appliquées au tweet unique : liste de mots
+  bannis (« en effet », « il est important de noter »...), exemple few-shot, étape
+  d'auto-vérification avant réponse. Contrairement au script TikTok (zéro emoji), 1 emoji maximum
+  est toléré sur le hook — le média a changé de nature (post texte lu, pas un script parlé).
+  Déclenché pour la Route A **et** la Route CONCERT (même périmètre que T14).
+- `pipeline.py`/`notifier.py`/`settings.py`/`storage.py` renommés en conséquence
+  (`write_instagram_news`, `discord_webhook_instagram_news`, `notify_instagram_news`,
+  colonnes `instagram_*`) — nouvelle migration additive (`_MIGRATED_COLUMNS`), les anciennes
+  colonnes `tiktok_*` restent en base mais inutilisées (suppression `ALTER TABLE DROP COLUMN`
+  jugée trop risquée sur une base de production réelle pour un simple renommage — même prudence
+  que pour `thread_topics.concept_id`, T15bis).
+- `PROMPT_VERSION` passé à `v3` (contexte de page + nouveau format Instagram).
+
+**Fichiers concernés** : `scraper.py` **(nouveau)**, `fetcher.py` (`BROWSER_HEADERS` rendu
+public), `models.py` (`InstagramNewsPost`, `ArticleRecord.extra_image_urls`/`instagram_*`),
+`analyzer.py` (`_PAGE_CONTEXT_BLOCK`, `page_text` sur `classify()`/`write()`,
+`_INSTAGRAM_NEWS_SYSTEM_PROMPT`, `write_instagram_news()`), `storage.py` (migration, colonnes,
+`save_analysis`), `notifier.py`, `settings.py`, `pipeline.py`, `.env.example`,
+`.github/workflows/pipeline.yml`, `pyproject.toml` (+`beautifulsoup4`).
+
+**Restant à faire (côté utilisateur)** : ajouter `DISCORD_WEBHOOK_INSTAGRAM_NEWS` comme secret
+GitHub Actions pour activer le salon en production (`DISCORD_WEBHOOK_TIKTOK`, jamais ajouté en
+production selon T14, n'a donc rien à migrer).
+
+**Fait quand** : tests sur `scraper.fetch_article_page` (image principale, repli `twitter:image`,
+retrait du bruit nav/footer, troncature, échecs réseau/HTML non exploitable → `None` sans lever,
+`test_scraper.py` nouveau), sur l'injection de `known_artists`/`page_text` dans
+`classify()`/`write()` (`test_analyzer.py`), sur le nouveau prompt/schéma Instagram
+(`test_analyzer.py`, `test_models.py` dont les bornes 2-3 hashtags), sur les nouveaux messages
+Discord (`test_notifier.py`), sur la migration + `COALESCE` de `image_url` (`test_storage.py`),
+et un test d'intégration bout en bout vérifiant que le texte scrapé atteint bien `classify()` et
+`write()` et que l'image/les images additionnelles sont enregistrées (`test_pipeline.py`).
+✔️ 278 tests au vert, `ruff` propre — pas encore observé en conditions réelles (prochain cycle
+GitHub Actions, une fois le secret ajouté).
+
+---
+
 ## Ordre d'exécution — où on en est
 
 ```
@@ -971,6 +1170,15 @@ tweets) — 209 tests au vert, `ruff` propre.
    de rédaction + équilibrage piliers/thème/angle) — indépendant du reste (nouveau pipeline
    parallèle, nouveaux crons dédiés). T15/T15bis validés en conditions réelles ; T15ter/T15quater
    testés (mocks + config réelle en dry-run) mais pas encore observés sur un vrai cycle complet.
+
+✅T17 (visuel social 9:16 TikTok/Instagram) — indépendant du reste (nouveau pipeline parallèle,
+   nouveau cron dédié). Codé et testé (251 tests + rendu Playwright réel vérifié manuellement),
+   reste à activer en observant un vrai cycle complet une fois `DISCORD_WEBHOOK_SOCIAL` en place.
+
+✅T18 (scraping de page article + post Instagram, remplace le script TikTok de T14) — dans le
+   cycle articles principal (`run_cycle`), aucun nouveau pipeline/cron. Codé et testé (278
+   tests), reste à activer en production (`DISCORD_WEBHOOK_INSTAGRAM_NEWS`) et à observer un
+   premier cycle réel.
 ```
 
 **Restant concrètement** :
@@ -985,9 +1193,8 @@ tweets) — 209 tests au vert, `ruff` propre.
   T5bis nécessite en plus un travail d'annotation manuelle de ta part.
 - **T13** : `DISCORD_WEBHOOK_INFO_A_VERIFIER` et `GEMINI_API_KEY_2` ajoutés comme secrets
   **GitHub Actions** — fait, confirmé par l'utilisateur.
-- **T14** : salon Discord + webhook créés, prompt révisé (schéma à 6 champs, zéro emoji) — reste
-  à ajouter `DISCORD_WEBHOOK_TIKTOK` comme secret GitHub Actions pour l'activer en production
-  (`.env` local déjà à jour).
+- **T14** — remplacé par **T18** (voir ci-dessous) : le script TikTok n'existe plus, `.env` local
+  et code utilisent désormais `DISCORD_WEBHOOK_INSTAGRAM_NEWS`.
 - **T15 / T15bis** — threads Twitter quotidiens + idéation hybride, fait et validé en conditions
   réelles (Bot Discord créé, secrets GitHub Actions en place, cycle complet observé). **T15ter**
   (style de rédaction + modèle dédié) et **T15quater** (piliers éditoriaux + équilibrage
@@ -995,6 +1202,16 @@ tweets) — 209 tests au vert, `ruff` propre.
   (`thread-replenish` → `thread-select` → `thread-resolve`) pour juger qualitativement le
   résultat sur un lot réellement diversifié. Reste un ajustement possible : enrichir encore
   `config/thread_concepts.yaml` au fil du temps si le backlog se vide plus vite que prévu.
+- **T17** — visuel social 9:16, codé et testé (unitaire + rendu Playwright réel vérifié
+  manuellement) — reste à créer le salon Discord privé, ajouter `DISCORD_WEBHOOK_SOCIAL` en local
+  (`.env`) puis en secret **GitHub Actions**, et observer un premier cycle réel complet
+  (téléchargement d'une vraie image RSS, rendu, envoi Discord) pour juger le rendu visuel en
+  situation avant de considérer la fonctionnalité pleinement validée.
+- **T18** — scraping de page + post Instagram, codé et testé (278 tests) — reste à créer le
+  salon Discord dédié, ajouter `DISCORD_WEBHOOK_INSTAGRAM_NEWS` en local (`.env`) puis en secret
+  **GitHub Actions**, et observer un premier cycle réel pour juger la qualité du texte généré et
+  la fiabilité du scraping sur les 5 sources actives (Soompi, Yonhap Culture, Koreaboo, Billboard
+  K-Pop, KpopStarz) — chacune peut avoir une structure HTML différente, non testée en réel.
 
 ---
 
@@ -1077,8 +1294,33 @@ tweets) — 209 tests au vert, `ruff` propre.
 | Robustesse de la réponse IA | `run_thread_replenish` vérifie que les `pair_index` reçus correspondent exactement aux paires soumises ; tout écart fait ignorer le lot entier plutôt que d'insérer un topic mal rattaché |
 | Rétrocompatibilité | Topics historiques (`concept_id` NULL) conservés tels quels — migration idempotente, rien en aval n'exige ce champ |
 
+### Nouvelle décision — visuel social 9:16 TikTok/Instagram (T17)
+
+| Sujet | Décision |
+|---|---|
+| Rendu HTML/CSS → image | **Playwright / Chromium headless**, pas Pillow — donne gratuitement, via CSS, le rendu responsive (image sans déformation, texte qui ne déborde jamais) demandé, au prix d'une dépendance nettement plus lourde (~300 Mo) que le reste du projet |
+| Intégration au pipeline | **Pipeline séparé + workflow GitHub Actions dédié** (`social_pipeline.py`/`social_visuals.yml`), même schéma que les threads (T15) — isole le cœur du pipeline articles déjà en production du poids de Chromium, plutôt qu'un ajout non bloquant direct dans `run_cycle` comme T14 |
+| Portée | Route A + B + Concert (tout article `SENT`), pas seulement Route A — plus de visuels à relire, mais rien n'est laissé de côté |
+| Source de l'image | Image du flux RSS de l'article en priorité (nouvelle extraction), repli sur la bibliothèque interne `media_library.py` (T16) si absente/inexploitable, aucun visuel en dernier recours — jamais de recherche d'image sur le web (même principe de prudence droits d'auteur que T16) |
+| Taille de police du tweet | Calculée en Python par paliers de longueur, pas laissée à un `clamp()` CSS seul — garantit qu'aucun tweet ne déborde du bloc texte, quelle que soit sa longueur réelle |
+| Articles déjà `SENT` en production au moment du déploiement | **Backfill de `social_visual_sent_at` au moment de la migration** (`= sent_at` pour tout article déjà `SENT`) — sans ça, le premier run aurait régénéré un visuel rétroactif pour chaque article déjà envoyé avant cette fonctionnalité |
+
+### Nouvelle décision — scraping de page + post Instagram (T18)
+
+| Sujet | Décision |
+|---|---|
+| Format du 3e appel IA | **Post Instagram texte "scroll-stopper narratif"** (hook + 2 paragraphes + question d'engagement), pas un script vidéo à l'oral (T14) ni des diapositives de carrousel — proposé sous forme de 3 maquettes concrètes, tranché par l'utilisateur |
+| Comment enrichir le contexte | **Scraping best-effort de la page article** (`scraper.py`, nouveau) plutôt que de se limiter à l'extrait RSS — seule façon d'accéder à une information (souvent le nom de l'idole) absente du titre et de l'extrait |
+| Bibliothèque de parsing HTML | **`beautifulsoup4`** (nouvelle dépendance) plutôt que du regex fait main ou Playwright (déjà présent mais réservé au rendu du visuel social, T17) — les sources sont des sites d'actu classiques, pas des pages fortement dépendantes du JS |
+| Où déclencher le scraping | **Après déduplication, juste avant `classify()`** — même principe que les appels Gemini : le coût (une requête HTTP en plus) doit rester proportionnel aux vraies nouveautés, jamais au flux RSS brut |
+| Échec de scraping | **Jamais bloquant** — `None` partout où la page n'est pas exploitable, repli silencieux sur le seul extrait RSS, comme avant ce module |
+| Image principale | `<meta property="og:image">` (repli `twitter:image`) plutôt qu'un `<img>` choisi au hasard — quasi universel sur les sites d'actu, devient le 1er choix dans la chaîne de repli du visuel social (T17), avant l'image RSS |
+| Autres images de la page | Capturées et stockées (`extra_image_urls`) mais **aucun consommateur pour l'instant** — répond à la demande explicite de l'utilisateur (« pourquoi pas les autres si possible ») sans construire de fonctionnalité autour tant qu'aucun usage concret n'est décidé |
+| Le tweet qui reste vague sur le nom de l'idole | Root cause identifiée en code, pas seulement un problème de donnée manquante : `classify()` produit déjà `artists`, mais `write()` ne le recevait jamais — corrigé en transmettant `known_artists` au prompt de rédaction, indépendamment du scraping |
+| Anciennes colonnes `tiktok_*` | Laissées en base, inutilisées, plutôt que `DROP COLUMN` — suppression jugée trop risquée sur une base de production réelle pour un simple renommage |
+
 Plus aucun point structurant n'est ouvert sur l'architecture initiale. Les seuls ajustements
 restants (liste de sources étendue au-delà des 3 retenues, contenu précis d'`artist_tiers.yaml`,
 mapping exact des badges, détails de configuration de T12, enrichissement de
-`thread_concepts.yaml` au fil du temps) sont des paramètres modifiables sans toucher au code, ou
-des sous-tâches déjà découpées ci-dessus.
+`thread_concepts.yaml` au fil du temps, réglages fins du template `social_post.html`) sont des
+paramètres modifiables sans toucher au code, ou des sous-tâches déjà découpées ci-dessus.

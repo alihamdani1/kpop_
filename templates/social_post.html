@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 1080px;
+      height: 1920px;
+      background-color: #121212; /* Fond de sécurité sombre si l'image charge mal */
+      font-family: 'Inter', sans-serif;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* --- 1. ZONE SUPÉRIEURE : L'IMAGE & LOGO --- */
+    .top-section {
+      position: relative;
+      width: 100%;
+      height: 980px; /* ~50% de la hauteur */
+      background-color: #1a1a1a;
+      overflow: hidden;
+    }
+
+    .top-section img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover; /* S'adapte sans déformation */
+      object-position: center 20%;
+    }
+
+    /* Dégradé subtil en bas de l'image pour faire ressortir le logo */
+    .image-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 250px;
+      background: linear-gradient(to top, rgba(0, 0, 0, 0.75), transparent);
+    }
+
+    /* Logo incrusté en bas à gauche de la photo */
+    .brand-logo {
+      position: absolute;
+      bottom: 40px;
+      left: 70px;
+      font-size: 115px;
+      font-weight: 900;
+      color: #ffffff;
+      letter-spacing: -2px;
+      line-height: 1;
+      text-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+      z-index: 10;
+    }
+
+    /* --- 2. ZONE INFÉRIEURE : FOND JAUNE & CONTENU --- */
+    .bottom-section {
+      position: relative;
+      width: 100%;
+      flex: 1; /* Prend tout le reste de la hauteur */
+      background-color: #FFD43F; /* Le jaune vif signature */
+      color: #000000;
+      padding: 60px 80px 100px 80px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    /* Coin coupé moderne en haut à droite (effet biseauté) */
+    .cut-corner {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 0;
+      height: 0;
+      border-style: solid;
+      border-width: 0 90px 90px 0;
+      border-color: transparent #1a1a1a transparent transparent;
+    }
+
+    /* Tag de Catégorie (ex: POLITIQUE, MUSIQUE, RECORD) */
+    .category-tag {
+      font-size: 28px;
+      font-weight: 900;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 30px;
+    }
+
+    /* Texte principal du tweet */
+    .tweet-text {
+      font-weight: 800;
+      line-height: 1.25;
+      letter-spacing: -1px;
+      color: #000000;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    /* Paliers choisis en Python (visual_generator._font_size_class) selon la longueur du texte —
+       46px est la taille d'origine du gabarit, réduite sur les tweets plus longs pour ne jamais
+       déborder du bloc jaune (pas de scroll possible sur une capture d'écran). */
+    .text-lg { font-size: 46px; }
+    .text-md { font-size: 38px; }
+    .text-sm { font-size: 32px; }
+
+    /* Date et Heure */
+    .timestamp {
+      margin-top: 30px;
+      font-size: 26px;
+      font-weight: 600;
+      color: rgba(0, 0, 0, 0.7);
+    }
+
+    /* Call to action du bas (TikTok / Insta Swipe) */
+    .footer-cta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 28px;
+      font-weight: 700;
+      color: #000000;
+      padding-bottom: 40px; /* Safe zone basse */
+    }
+
+    .footer-cta span.arrow {
+      font-size: 24px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- PARTIE HAUTE : IMAGE ET MARQUE -->
+  <div class="top-section">
+    <img src="{{ image_data_uri }}" alt="">
+    <div class="image-overlay"></div>
+    <div class="brand-logo">RUAN!</div>
+  </div>
+
+  <!-- PARTIE BASSE : CONTENU JAUNE -->
+  <div class="bottom-section">
+    <div class="cut-corner"></div>
+
+    <div class="main-content">
+      <div class="category-tag">{{ category_label }}</div>
+      <div class="tweet-text {{ font_size_class }}">{{ tweet_text }}</div>
+      <div class="timestamp">{{ formatted_date }}</div>
+    </div>
+
+    <div class="footer-cta">
+      <span class="arrow">▲</span> Glissez vers la gauche pour en savoir plus
+    </div>
+  </div>
+
+</body>
+</html>

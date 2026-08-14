@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from kpop_bot import analyzer, fetcher, notifier, storage
+from kpop_bot import analyzer, fetcher, notifier, scraper, storage
 from kpop_bot.models import (
     TWEET_TAG_LABELS,
     ArticleStatus,
@@ -32,10 +32,11 @@ class CycleStats:
     analysis_failed: int = 0
     sent: int = 0
     send_failed: int = 0
-    tiktok_generated: int = 0
-    tiktok_generation_failed: int = 0
-    tiktok_sent: int = 0
-    tiktok_send_failed: int = 0
+    instagram_news_generated: int = 0
+    instagram_news_generation_failed: int = 0
+    instagram_news_sent: int = 0
+    instagram_news_send_failed: int = 0
+    scraped_pages: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
     france_overrides: int = 0
@@ -51,9 +52,10 @@ class CycleStats:
             f"filtrés={self.filtered} vers_verif={self.filtered_reviewed} "
             f"échecs_analyse={self.analysis_failed} "
             f"envoyés={self.sent} échecs_envoi={self.send_failed} "
-            f"tiktok_generes={self.tiktok_generated} tiktok_echecs_gen="
-            f"{self.tiktok_generation_failed} tiktok_envoyes={self.tiktok_sent} "
-            f"tiktok_echecs_envoi={self.tiktok_send_failed} "
+            f"pages_scrapees={self.scraped_pages} "
+            f"ig_news_generes={self.instagram_news_generated} ig_news_echecs_gen="
+            f"{self.instagram_news_generation_failed} ig_news_envoyes={self.instagram_news_sent} "
+            f"ig_news_echecs_envoi={self.instagram_news_send_failed} "
             f"filet_france={self.france_overrides} filet_record={self.milestone_flags} "
             f"tokens_in={self.tokens_in} tokens_out={self.tokens_out}"
         )
@@ -66,11 +68,12 @@ def _api_keys(settings: Settings) -> list[str]:
     return keys
 
 
-def _tiktok_api_keys(settings: Settings) -> list[str]:
-    """Mêmes clés que l'analyseur principal, mais clé 2 en priorité si elle est présente (voir
-    TODO.md T14) — la génération de scripts TikTok (Route A, volume plus faible) utilise ainsi
-    en priorité un pool de quota distinct de classify()/write(), plutôt que de n'intervenir
-    qu'en dernier recours comme le prévoit la chaîne de secours par défaut."""
+def _instagram_news_api_keys(settings: Settings) -> list[str]:
+    """Mêmes clés que l'analyseur principal, mais clé 2 en priorité si elle est présente (même
+    principe qu'en T14) — la génération du post Instagram (Route A/CONCERT, volume plus
+    faible) utilise ainsi en priorité un pool de quota distinct de classify()/write(), plutôt
+    que de n'intervenir qu'en dernier recours comme le prévoit la chaîne de secours par
+    défaut."""
     return list(reversed(_api_keys(settings)))
 
 
@@ -100,21 +103,30 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
         artist_tiers=artist_tiers,
         min_seconds_between_calls=settings.gemini_min_seconds_between_calls,
     )
-    # Instance séparée, clé 2 en priorité — voir _tiktok_api_keys. None si le salon dédié
-    # n'est pas configuré : aucune instance construite, aucun appel Gemini supplémentaire.
-    gemini_tiktok = (
+    # Instance séparée, clé 2 en priorité — voir _instagram_news_api_keys. None si le salon
+    # dédié n'est pas configuré : aucune instance construite, aucun appel Gemini supplémentaire.
+    gemini_instagram_news = (
         analyzer.GeminiAnalyzer(
-            api_keys=_tiktok_api_keys(settings),
+            api_keys=_instagram_news_api_keys(settings),
             models=models_chain,
             artist_tiers=artist_tiers,
             min_seconds_between_calls=settings.gemini_min_seconds_between_calls,
         )
-        if settings.discord_webhook_tiktok
+        if settings.discord_webhook_instagram_news
         else None
     )
 
     pending_new = storage.pending(conn, ArticleStatus.NEW, limit=limit)
     for article in pending_new:
+        # Scraping best-effort de la page article (T18) — après dédup, comme le veut le
+        # principe du pipeline (coût proportionnel aux vraies nouveautés). Ne lève jamais :
+        # None si la page n'apporte rien d'exploitable, l'article continue avec le seul
+        # extrait RSS, exactement comme avant l'introduction de ce module.
+        scraped = scraper.fetch_article_page(article.url, timeout=settings.request_timeout_seconds)
+        page_text = scraped.text if scraped else None
+        if scraped is not None:
+            stats.scraped_pages += 1
+
         france_flag = analyzer.matches_france_keywords(article, settings.france_keywords)
         if france_flag:
             stats.france_overrides += 1
@@ -125,7 +137,7 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
             stats.milestone_flags += 1
         try:
             classification, tin1, tout1 = gemini.classify(
-                article, france_flag=france_flag, milestone_flag=milestone_flag
+                article, france_flag=france_flag, milestone_flag=milestone_flag, page_text=page_text
             )
         except analyzer.QuotaExceededError:
             logger.warning(
@@ -144,7 +156,9 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
         tin2 = tout2 = 0
         if route != Route.IGNORED:
             try:
-                writing, tin2, tout2 = gemini.write(article, classification, route)
+                writing, tin2, tout2 = gemini.write(
+                    article, classification, route, page_text=page_text
+                )
                 tag = determine_tweet_tag(
                     classification.category, classification.importance, classification.virality
                 )
@@ -166,29 +180,29 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
                 stats.errors.append(f"write({article.url}): {exc}")
                 continue
 
-        tiktok_result = None
+        instagram_news_result = None
         tin3 = tout3 = 0
-        if route in (Route.A, Route.CONCERT) and gemini_tiktok is not None:
-            # Échec non bloquant : le tweet/résumé vidéo a déjà réussi, un script TikTok raté
+        if route in (Route.A, Route.CONCERT) and gemini_instagram_news is not None:
+            # Échec non bloquant : le tweet/résumé vidéo a déjà réussi, un post Instagram raté
             # ne doit ni faire échouer l'article ni arrêter le cycle — c'est un bonus, pas un
-            # pré-requis de diffusion (voir T14).
+            # pré-requis de diffusion (même principe qu'en T14).
             try:
-                tiktok_result, tin3, tout3 = gemini_tiktok.write_tiktok_script(
-                    article, classification
+                instagram_news_result, tin3, tout3 = gemini_instagram_news.write_instagram_news(
+                    article, classification, page_text=page_text
                 )
-                stats.tiktok_generated += 1
+                stats.instagram_news_generated += 1
             except analyzer.QuotaExceededError:
                 logger.warning(
-                    "Quota Gemini (script TikTok) atteint pour %s — script ignoré pour cet "
+                    "Quota Gemini (post Instagram) atteint pour %s — post ignoré pour cet "
                     "article, cycle poursuivi.",
                     article.url,
                 )
-                stats.tiktok_generation_failed += 1
+                stats.instagram_news_generation_failed += 1
             except analyzer.AnalysisError as exc:
                 logger.warning(
-                    "Échec de génération du script TikTok pour %s : %s", article.url, exc
+                    "Échec de génération du post Instagram pour %s : %s", article.url, exc
                 )
-                stats.tiktok_generation_failed += 1
+                stats.instagram_news_generation_failed += 1
 
         storage.save_analysis(
             conn,
@@ -200,7 +214,9 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
             tin1 + tin2 + tin3,
             tout1 + tout2 + tout3,
             analyzer.PROMPT_VERSION,
-            tiktok=tiktok_result,
+            instagram_news=instagram_news_result,
+            image_url=scraped.main_image_url if scraped else None,
+            extra_image_urls=scraped.extra_image_urls if scraped else None,
         )
         stats.classified += 1
         stats.tokens_in += tin1 + tin2 + tin3
@@ -216,7 +232,7 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
 
     to_send = storage.pending(conn, ArticleStatus.ANALYZED)
     send_index = 0  # numérote uniquement les envois réels, voir notifier.build_info_header
-    tiktok_send_index = 0  # compteur séparé — voir notifier.notify_tiktok
+    instagram_news_send_index = 0  # compteur séparé — voir notifier.notify_instagram_news
     for article in to_send:
         if dry_run:
             route_label = article.route.value if article.route else "?"
@@ -240,25 +256,25 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
             stats.errors.append(f"send({article.url}): {exc}")
             continue
 
-        # Envoi TikTok best-effort, uniquement après un envoi principal réussi ci-dessus — un
-        # échec ici ne doit jamais faire revenir l'article en arrière (voir T14).
+        # Envoi Instagram best-effort, uniquement après un envoi principal réussi ci-dessus — un
+        # échec ici ne doit jamais faire revenir l'article en arrière (même principe qu'en T14).
         if (
-            settings.discord_webhook_tiktok
+            settings.discord_webhook_instagram_news
             and article.route in (Route.A, Route.CONCERT)
-            and article.tiktok_script_body
+            and article.instagram_hook
         ):
-            tiktok_send_index += 1
+            instagram_news_send_index += 1
             try:
-                notifier.notify_tiktok(
+                notifier.notify_instagram_news(
                     article,
-                    url=settings.discord_webhook_tiktok,
+                    url=settings.discord_webhook_instagram_news,
                     timeout=settings.request_timeout_seconds,
-                    index=tiktok_send_index,
+                    index=instagram_news_send_index,
                 )
-                stats.tiktok_sent += 1
+                stats.instagram_news_sent += 1
             except notifier.NotificationError as exc:
-                stats.tiktok_send_failed += 1
-                stats.errors.append(f"tiktok_send({article.url}): {exc}")
+                stats.instagram_news_send_failed += 1
+                stats.errors.append(f"instagram_news_send({article.url}): {exc}")
 
     if settings.discord_webhook_info_a_verifier:
         to_review = storage.pending(conn, ArticleStatus.FILTERED)

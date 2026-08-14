@@ -11,6 +11,7 @@ import sys
 
 from kpop_bot.pipeline import resend_sent, run_cycle
 from kpop_bot.settings import get_settings
+from kpop_bot.social_pipeline import run_social_visuals
 from kpop_bot.thread_pipeline import run_thread_replenish, run_thread_resolve, run_thread_select
 
 # 30 : écoule un backlog de ~94 articles en ~4 cycles plutôt que ~19 (ex-limite de 5), tout
@@ -88,6 +89,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "--verbose", action="store_true", help="Active les logs de niveau DEBUG."
     )
 
+    social_parser = subparsers.add_parser(
+        "social-visuals",
+        help="Génère et envoie le visuel 9:16 (image RSS + tweet) des articles SENT qui n'en "
+        "ont pas encore reçu un, vers le salon Discord privé de prévisualisation.",
+    )
+    social_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="N'utilise pas Chromium ni Discord ; journalise les articles qui seraient traités.",
+    )
+    social_parser.add_argument(
+        "--verbose", action="store_true", help="Active les logs de niveau DEBUG."
+    )
+
     return parser
 
 
@@ -142,6 +157,12 @@ def main(argv: list[str] | None = None) -> int:
             stats.generation_failed,
             stats.quota_exceeded,
         )
+        return 0
+
+    if args.command == "social-visuals":
+        settings = get_settings()
+        stats = run_social_visuals(settings, dry_run=args.dry_run)
+        log.info("Visuels sociaux — %s.", stats.summary())
         return 0
 
     parser.error(f"Commande inconnue : {args.command}")

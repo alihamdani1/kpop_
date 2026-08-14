@@ -1,0 +1,73 @@
+name: Visuels sociaux 9:16
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: pipeline-run
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  social-visuals:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+
+      - name: Installer les dépendances
+        run: pip install .
+
+      - name: Récupérer la version de Playwright installée
+        id: playwright-version
+        run: echo "version=$(python -c 'import playwright; print(playwright.__version__)')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache du navigateur Chromium
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ steps.playwright-version.outputs.version }}
+
+      - name: Installer Chromium (si absent du cache)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: playwright install --with-deps chromium
+
+      - name: Installer uniquement les dépendances système de Chromium (cache-hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: playwright install-deps chromium
+
+      - name: Générer et envoyer les visuels sociaux
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          # Requis par Settings mais inutilisés par social-visuals — évite un échec de
+          # chargement de la config si ces secrets ne sont pas (encore) définis, même remarque
+          # que pour thread-resolve dans pipeline.yml.
+          DISCORD_WEBHOOK_ROUTE_A: ${{ secrets.DISCORD_WEBHOOK_ROUTE_A }}
+          DISCORD_WEBHOOK_ROUTE_B: ${{ secrets.DISCORD_WEBHOOK_ROUTE_B }}
+          DISCORD_WEBHOOK_SOCIAL: ${{ secrets.DISCORD_WEBHOOK_SOCIAL }}
+        run: python -m kpop_bot social-visuals
+
+      - name: Committer la base si modifiée
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/kpop.db
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: mise à jour automatique de la base (visuels sociaux)"
+            git push
+          else
+            echo "Aucun changement dans la base, rien à committer."
+          fi

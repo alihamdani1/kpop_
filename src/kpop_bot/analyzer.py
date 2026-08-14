@@ -18,12 +18,12 @@ from kpop_bot.models import (
     ArticleRecord,
     Category,
     ClassificationResult,
+    InstagramNewsPost,
     Route,
     ThreadAngle,
     ThreadConcept,
     ThreadTopicRecord,
     ThreadWritingResult,
-    TikTokScriptResult,
     TopicIdeationResult,
     Virality,
     WritingResult,
@@ -31,7 +31,9 @@ from kpop_bot.models import (
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v2"  # v2 : distinction record vérifiable / classement racoleur — voir T13
+PROMPT_VERSION = "v3"  # v3 : contexte de page scrapée (T18) + post Instagram remplace le script
+# TikTok de T14 — voir TODO.md T18. v2 : distinction record vérifiable / classement racoleur
+# (T13).
 
 _T = TypeVar("_T", bound=BaseModel)
 
@@ -73,6 +75,20 @@ def _format_artist_tiers(tiers: dict[str, list[str]]) -> str:
     return "\n".join(lines) if lines else "(aucune donnée de référence disponible)"
 
 
+def _page_context_block(page_text: str | None) -> str:
+    """Bloc optionnel injecté en fin de prompt (T18) — vide si aucun texte de page n'a été
+    scrapé pour cet article (voir scraper.py, best-effort partout)."""
+    return _PAGE_CONTEXT_BLOCK.format(page_text=page_text) if page_text else ""
+
+
+def _known_artists_text(artists: list[str]) -> str:
+    """Texte injecté dans les prompts de rédaction pour forcer un nom précis plutôt qu'une
+    formulation aussi vague qu'un titre racoleur (voir TODO.md T18)."""
+    if artists:
+        return ", ".join(artists)
+    return "non identifié précisément — reste général plutôt que d'inventer un nom"
+
+
 def _matches_any_keyword(text: str, keywords: list[str]) -> bool:
     """Recherche insensible à la casse, sur mots/phrases entiers (frontière `\\b`), gère les
     mots-clés multi-mots (ex. 'Stade de France', 'billion views') aussi bien qu'un seul mot."""
@@ -101,10 +117,19 @@ def matches_viral_milestone(
     return _matches_any_keyword(text, known_artists)
 
 
+_PAGE_CONTEXT_BLOCK = """
+## Contexte additionnel (extrait de la page article, en plus du titre/extrait ci-dessus)
+{page_text}
+
+Utilise ce contexte en priorité pour identifier précisément les artistes/groupes cités, \
+notamment quand le titre reste volontairement vague à leur sujet (titre racoleur) — le nom \
+exact apparaît souvent seulement dans le corps de l'article, jamais dans le titre.
+"""
+
 _CLASSIFICATION_SYSTEM_PROMPT = """\
 Tu es l'assistant éditorial d'un média francophone spécialisé K-pop. Pour l'article \
-anglophone fourni, classe-le selon quatre axes, en te basant uniquement sur le titre et \
-l'extrait donnés.
+anglophone fourni, classe-le selon quatre axes, en te basant sur le titre, l'extrait, et le \
+contexte additionnel de page fourni ci-dessous s'il y en a un.
 
 ## Catégorie (choisis-en une seule)
 - SCANDALE_DRAMA : controverse, litige contractuel, polémique, affaire judiciaire, départ de \
@@ -140,8 +165,10 @@ Justifie ton choix en une phrase courte dans `virality_reason`.
 Un artiste absent de cette liste n'a ni bonus ni malus explicite.
 
 ## Artistes
-Liste les noms d'artistes/groupes explicitement cités dans l'article.
-{france_note}{milestone_note}
+Liste les noms d'artistes/groupes explicitement cités dans l'article. Si le titre est vague à \
+leur sujet mais qu'un nom apparaît dans l'extrait ou le contexte additionnel, cite-le quand \
+même — c'est justement ce que la rédaction a besoin de savoir.
+{france_note}{milestone_note}{page_context_block}
 Réponds uniquement selon le schéma JSON fourni.
 """
 
@@ -165,16 +192,19 @@ et évalue l'importance et la viralité en conséquence (généralement élevée
 
 _WRITING_SYSTEM_PROMPT = """\
 Tu es l'assistant éditorial d'un média francophone spécialisé K-pop. L'article suivant a déjà \
-été classé : catégorie {category}, importance {importance}, viralité {virality}. Rédige en \
-français, dans le style d'un média d'actualité :
+été classé : catégorie {category}, importance {importance}, viralité {virality}. \
+Artiste(s)/groupe(s) déjà identifié(s) à l'étape de classification : {known_artists}. Rédige \
+en français, dans le style d'un média d'actualité :
 
 - `summary_fr` : un résumé de 2 phrases, ton journalistique, directement exploitable pour un \
 tri rapide.
 - `tweet_draft` : un brouillon de tweet PRÊT À PUBLIER (jamais posté automatiquement — un \
 humain le relit toujours avant). 260 caractères maximum (un tag visuel sera ajouté séparément \
 devant, ne l'inclus pas). Ton journalistique neutre. 1 à 2 emojis maximum. Exactement 2 \
-hashtags pertinents (ex. #KPop et le nom du groupe). En français. {engagement_hook}
-{video_instruction}
+hashtags pertinents (ex. #KPop et le nom du groupe). En français. IMPORTANT : nomme \
+précisément l'artiste/groupe concerné (voir liste ci-dessus) — ne reste jamais aussi vague \
+qu'un titre racoleur qui ne le citerait pas. {engagement_hook}
+{video_instruction}{page_context_block}
 Réponds uniquement selon le schéma JSON fourni.
 """
 
@@ -200,79 +230,63 @@ _ENGAGEMENT_HOOKS: dict[Category, str] = {
     ),
 }
 
-# Prompt dédié (T14), séparé de _WRITING_SYSTEM_PROMPT : demander au même appel de réussir un
-# tweet court et contraint ET un script plus long avec des idées de montage dilue la qualité
-# des deux sur un modèle lite — un prompt à objectif unique est plus fiable.
-#
-# Pas de schéma JSON recopié en dur dans le texte : `response_schema=TikTokScriptResult`
-# contraint déjà la sortie côté API (decoding contraint) — le redemander en prose serait
-# redondant, et si jamais les deux divergeaient, c'est toujours response_schema qui gagne.
-_TIKTOK_SYSTEM_PROMPT = """\
-Tu es scénariste pour une chaîne TikTok francophone spécialisée K-pop. L'article suivant a \
-déjà été classé : catégorie {category}, importance {importance}, viralité {virality}.
+# Prompt dédié (T18, remplace le script TikTok de T14), séparé de _WRITING_SYSTEM_PROMPT :
+# demander au même appel de réussir un tweet court et contraint ET un post plus long dilue la
+# qualité des deux sur un modèle lite — un prompt à objectif unique est plus fiable. Reprend
+# les mêmes bonnes pratiques déjà validées pour le thread Twitter (T15ter) : mots bannis,
+# few-shot, auto-vérification — pas de schéma JSON recopié en dur, `response_schema=
+# InstagramNewsPost` contraint déjà la sortie côté API et prime toujours en cas de divergence.
+_INSTAGRAM_NEWS_SYSTEM_PROMPT = """\
+Tu es responsable éditorial(e) d'un compte Instagram francophone d'actu K-pop. L'article \
+suivant a déjà été classé : catégorie {category}, importance {importance}, viralité \
+{virality}. Artiste(s)/groupe(s) déjà identifié(s) à l'étape de classification : \
+{known_artists}.
 
-Ta mission : rédiger un script court, prêt à être tourné par un humain (jamais publié \
-automatiquement), optimisé pour la rétention et le partage sur TikTok.
+Ta mission : rédiger un post Instagram TEXTE, format « actu/breaking news » — pas un script à \
+tourner, pas des diapositives de carrousel. Un texte à lire, plus développé qu'un tweet, pensé \
+pour arrêter le scroll puis tenir en haleine jusqu'à la question finale.
 
 RÈGLE ABSOLUE : toute information (chiffre, nom, événement, citation) doit provenir \
-strictement du titre et de l'extrait fournis. Si une information manque, reste plus bref \
-plutôt que d'inventer.
+strictement du titre, de l'extrait, ou du contexte additionnel de page fourni ci-dessous s'il \
+y en a un. Si une information manque, reste plus général plutôt que d'inventer. Nomme \
+précisément l'artiste/groupe identifié ci-dessus — ne reste jamais aussi vague qu'un titre \
+racoleur qui ne le citerait pas.
 
-RÈGLE ABSOLUE : aucun emoji, nulle part (hook, texte à l'écran, script, chute, légende) — \
-contrairement au tweet, qui en autorise. Le ton doit rester percutant sans smiley.
+## Style — bannis le « langage IA »
+Interdiction d'utiliser : « en effet », « cependant », « néanmoins », « il est important de \
+noter », « plongeons dans », « crucial », « véritable », « incontournable », « d'ailleurs », \
+« il convient de », « au cœur de », « décryptage ». Écris comme un rédacteur qui poste à chaud \
+: phrases courtes, direct, oralité maîtrisée.
 
-STRUCTURE (le hook pose une promesse, le corps doit la tenir avant la fin — ne jamais \
-promettre une information que le corps ne livre pas) :
+## Structure attendue
+1. `hook` : une ligne d'accroche forte — un fait qui arrête le scroll (chiffre marquant, \
+affirmation qui surprend, ou déclaration choc). Jamais de méta-commentaire du type « info » ou \
+« à lire ». 1 emoji maximum, uniquement si ça renforce vraiment l'accroche.
+2. `paragraph_context` (2-4 phrases) : le contexte — qui, quoi, dans quel cadre.
+3. `paragraph_detail` (2-4 phrases) : ce qui fait la valeur de l'info — détails, réactions, \
+enjeu. Développe au-delà de ce qu'un tweet pourrait dire.
+4. `engagement_question` : une question courte qui invite à réagir en commentaire — jamais un \
+appel générique à liker/partager.
+5. `hashtags` : 2 à 3 hashtags pertinents (ex. #KPop et le nom du groupe), jamais mêlés au \
+texte des paragraphes.
 
-1. `hook` (1-2 phrases, ~15-20 mots, ~5-6 secondes à l'oral) : capte l'attention en 2-3 \
-secondes — question, chiffre marquant, ou affirmation qui surprend. Formule une promesse \
-claire et vérifiable dans l'article.
-2. `on_screen_texte` (5-8 mots maximum) : texte overlay affiché dès les 2 premières secondes, \
-renforce visuellement le hook parlé (pour les spectateurs sans son).
-3. `script_body` (4-6 phrases, ~60-80 mots, ~20-25 secondes à l'oral) : ton oral et \
-dynamique, comme si on parlait à la caméra. Développe le sujet avec plus de détail que le \
-tweet déjà rédigé. Doit explicitement livrer la promesse du hook. Si le sujet le permet, \
-inclure une micro-relance vers le milieu du script (ex. « mais attends, c'est pas tout... ») \
-pour retenir l'attention jusqu'au bout.
-4. `closing_hook` (1 phrase courte, ~3-4 secondes à l'oral) : priorité au déclencheur de \
-partage plutôt qu'au simple commentaire — ex. inviter à taguer quelqu'un de concerné, ou \
-poser une question qui divise l'audience K-pop. Registre oral, cohérent avec la chute du \
-tweet déjà rédigé.
-5. `visual_ideas` (3 à 5 suggestions courtes) : plans/images pour le montage (archives, \
-zoom, texte à l'écran secondaire...). Seule partie du script où l'improvisation créative \
-est acceptée.
-6. `caption_seo` : légende courte incluant les mots-clés naturels de l'article, et 3-5 \
-hashtags pertinents pour la niche K-pop, mêlant hashtags larges et hashtags de niche.
+AVANT DE RÉPONDRE : relis le hook et les deux paragraphes, vérifie qu'aucune information ne \
+provient d'ailleurs que du titre/extrait/contexte fournis, et que l'artiste/groupe est nommé \
+précisément au moins une fois. Corrige si besoin.
 
-DURÉE CIBLE TOTALE : environ 30-40 secondes à l'oral (hook + script_body + closing_hook).
-
-AVANT DE RÉPONDRE : relis le hook, le script_body et le closing_hook, et vérifie qu'aucune \
-phrase ne contient une information (nom, chiffre, événement) absente du titre et de \
-l'extrait fournis, et qu'aucun emoji ne s'est glissé nulle part. Corrige si besoin.
-
-Exemple de ton attendu (article fictif, à ne jamais réutiliser tel quel — sert uniquement à \
-calibrer le ton, pas à copier la structure des phrases) :
+Exemple de ton attendu (sujet fictif, à ne jamais réutiliser tel quel — sert uniquement à \
+calibrer le style, pas à copier la structure des phrases) :
 {{
-  "hook": "Un membre du groupe vient de battre un record que personne n'avait touché depuis \
-10 ans.",
-  "on_screen_texte": "RECORD BATTU",
-  "script_body": "Alors ce qui vient de se passer, personne ne s'y attendait. Le titre solo \
-qu'il vient de sortir a dépassé en 24h un chiffre que même les plus gros comebacks du groupe \
-n'avaient jamais atteint. Mais attends, c'est pas fini : ce record tenait depuis plus de 10 \
-ans dans l'industrie. Les fans parlent déjà d'un tournant dans sa carrière solo.",
-  "closing_hook": "Tague la personne qui va halluciner en voyant ce chiffre.",
-  "visual_ideas": [
-    "Zoom sur le compteur de vues qui grimpe",
-    "Archive du comeback précédent en comparaison",
-    "Texte à l'écran avec le chiffre exact du record",
-    "Réactions de fans en incrustation"
-  ],
-  "caption_seo": {{
-    "legende": "Il vient de battre un record vieux de 10 ans",
-    "hashtags": ["#kpop", "#kpopnews", "#comeback"]
-  }}
+  "hook": "Un comeback annoncé sans prévenir, et déjà un record en vue.",
+  "paragraph_context": "Le groupe vient de confirmer son retour pour le mois prochain, avec \
+un premier extrait dévoilé ce matin. Aucune date n'avait fuité avant l'annonce officielle.",
+  "paragraph_detail": "Les premières réactions sur les réseaux évoquent déjà un potentiel \
+record de pré-sauvegardes pour le label. L'agence promet un concept radicalement différent \
+des sorties précédentes.",
+  "engagement_question": "Vous en pensez quoi de ce changement de direction musicale ?",
+  "hashtags": ["#KPop", "#Comeback"]
 }}
-
+{page_context_block}
 Réponds uniquement selon le schéma JSON fourni.
 """
 
@@ -455,12 +469,18 @@ class GeminiAnalyzer:
         self._last_call_at: float | None = None
 
     def classify(
-        self, item: ArticleRecord, *, france_flag: bool, milestone_flag: bool = False
+        self,
+        item: ArticleRecord,
+        *,
+        france_flag: bool,
+        milestone_flag: bool = False,
+        page_text: str | None = None,
     ) -> tuple[ClassificationResult, int, int]:
         system_prompt = _CLASSIFICATION_SYSTEM_PROMPT.format(
             artist_tiers=self._artist_tiers_text,
             france_note=_FRANCE_NOTE if france_flag else "",
             milestone_note=_MILESTONE_NOTE if milestone_flag else "",
+            page_context_block=_page_context_block(page_text),
         )
         user_content = f"Source : {item.source}\nTitre : {item.title}\nExtrait : {item.raw_summary}"
         result, tokens_in, tokens_out = self._generate_with_fallback(
@@ -504,31 +524,44 @@ class GeminiAnalyzer:
         return result, tokens_in, tokens_out
 
     def write(
-        self, item: ArticleRecord, classification: ClassificationResult, route: Route
+        self,
+        item: ArticleRecord,
+        classification: ClassificationResult,
+        route: Route,
+        *,
+        page_text: str | None = None,
     ) -> tuple[WritingResult, int, int]:
         system_prompt = _WRITING_SYSTEM_PROMPT.format(
             category=classification.category.value,
             importance=classification.importance.value,
             virality=classification.virality.value if classification.virality else "N/A",
+            known_artists=_known_artists_text(classification.artists),
             engagement_hook=_ENGAGEMENT_HOOKS.get(classification.category, ""),
             video_instruction=_VIDEO_INSTRUCTION if route == Route.A else "",
+            page_context_block=_page_context_block(page_text),
         )
         user_content = f"Titre : {item.title}\nExtrait : {item.raw_summary}\nLien : {item.url}"
         return self._generate_with_fallback(system_prompt, user_content, WritingResult)
 
-    def write_tiktok_script(
-        self, item: ArticleRecord, classification: ClassificationResult
-    ) -> tuple[TikTokScriptResult, int, int]:
-        """3e appel, dédié (T14) — Route A uniquement, appelé par le pipeline sur une instance
-        séparée dont l'ordre des clés API peut différer de celle de classify()/write() (voir
-        pipeline.py `_tiktok_api_keys`)."""
-        system_prompt = _TIKTOK_SYSTEM_PROMPT.format(
+    def write_instagram_news(
+        self,
+        item: ArticleRecord,
+        classification: ClassificationResult,
+        *,
+        page_text: str | None = None,
+    ) -> tuple[InstagramNewsPost, int, int]:
+        """3e appel, dédié (T18, remplace le script TikTok de T14) — Route A et Route CONCERT,
+        appelé par le pipeline sur une instance séparée dont l'ordre des clés API peut différer
+        de celle de classify()/write() (voir pipeline.py `_instagram_news_api_keys`)."""
+        system_prompt = _INSTAGRAM_NEWS_SYSTEM_PROMPT.format(
             category=classification.category.value,
             importance=classification.importance.value,
             virality=classification.virality.value if classification.virality else "N/A",
+            known_artists=_known_artists_text(classification.artists),
+            page_context_block=_page_context_block(page_text),
         )
         user_content = f"Titre : {item.title}\nExtrait : {item.raw_summary}\nLien : {item.url}"
-        return self._generate_with_fallback(system_prompt, user_content, TikTokScriptResult)
+        return self._generate_with_fallback(system_prompt, user_content, InstagramNewsPost)
 
     def ideate_thread_topics(
         self, *, candidate_pairs: list[tuple[str, ThreadConcept]]
