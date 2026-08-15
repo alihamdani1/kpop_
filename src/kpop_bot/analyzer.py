@@ -18,8 +18,8 @@ from kpop_bot.models import (
     ArticleRecord,
     Category,
     ClassificationResult,
-    InstagramNewsPost,
     Route,
+    SocialVisualContent,
     ThreadAngle,
     ThreadConcept,
     ThreadTopicRecord,
@@ -31,8 +31,11 @@ from kpop_bot.models import (
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v3"  # v3 : contexte de page scrapée (T18) + post Instagram remplace le script
-# TikTok de T14 — voir TODO.md T18. v2 : distinction record vérifiable / classement racoleur
+PROMPT_VERSION = "v5"  # v5 : 3e appel SocialVisualContent (titre + points clés pour le visuel
+# social 9:16, TOUTES routes retenues) remplace le post Instagram — celui-ci n'est plus utilisé
+# (voir TODO.md). v4 avait ajouté `headline_fr` directement au 2e appel (rédaction) ; retiré ici,
+# déplacé vers ce nouvel appel dédié. v3 : contexte de page scrapée (T18) + post Instagram
+# remplace le script TikTok de T14. v2 : distinction record vérifiable / classement racoleur
 # (T13).
 
 _T = TypeVar("_T", bound=BaseModel)
@@ -230,21 +233,20 @@ _ENGAGEMENT_HOOKS: dict[Category, str] = {
     ),
 }
 
-# Prompt dédié (T18, remplace le script TikTok de T14), séparé de _WRITING_SYSTEM_PROMPT :
-# demander au même appel de réussir un tweet court et contraint ET un post plus long dilue la
-# qualité des deux sur un modèle lite — un prompt à objectif unique est plus fiable. Reprend
-# les mêmes bonnes pratiques déjà validées pour le thread Twitter (T15ter) : mots bannis,
+# Prompt dédié — remplace le post Instagram de T18 (lui-même un remplacement du script TikTok
+# de T14), séparé de _WRITING_SYSTEM_PROMPT : demander au même appel un tweet court et contraint
+# ET un titre + points clés pour un format visuel différent dilue la qualité des deux sur un
+# modèle lite. Déclenché pour TOUTE route retenue (A, B, CONCERT), pas seulement Route
+# A/CONCERT comme les fonctionnalités précédentes — voir pipeline.py. Reprend les mêmes bonnes
+# pratiques déjà validées pour le thread Twitter (T15ter) et le post Instagram : mots bannis,
 # few-shot, auto-vérification — pas de schéma JSON recopié en dur, `response_schema=
-# InstagramNewsPost` contraint déjà la sortie côté API et prime toujours en cas de divergence.
-_INSTAGRAM_NEWS_SYSTEM_PROMPT = """\
-Tu es responsable éditorial(e) d'un compte Instagram francophone d'actu K-pop. L'article \
-suivant a déjà été classé : catégorie {category}, importance {importance}, viralité \
-{virality}. Artiste(s)/groupe(s) déjà identifié(s) à l'étape de classification : \
-{known_artists}.
-
-Ta mission : rédiger un post Instagram TEXTE, format « actu/breaking news » — pas un script à \
-tourner, pas des diapositives de carrousel. Un texte à lire, plus développé qu'un tweet, pensé \
-pour arrêter le scroll puis tenir en haleine jusqu'à la question finale.
+# SocialVisualContent` contraint déjà la sortie côté API et prime toujours en cas de divergence.
+_SOCIAL_VISUAL_SYSTEM_PROMPT = """\
+Tu es responsable éditorial(e) d'un compte TikTok/Instagram francophone d'actu K-pop, en charge \
+du texte affiché sur un visuel vertical type « card d'actu » (image en haut, texte en bas — pas \
+un tweet, pas un post à lire en entier). L'article suivant a déjà été classé : catégorie \
+{category}, importance {importance}, viralité {virality}. Artiste(s)/groupe(s) déjà \
+identifié(s) à l'étape de classification : {known_artists}.
 
 RÈGLE ABSOLUE : toute information (chiffre, nom, événement, citation) doit provenir \
 strictement du titre, de l'extrait, ou du contexte additionnel de page fourni ci-dessous s'il \
@@ -256,35 +258,29 @@ racoleur qui ne le citerait pas.
 Interdiction d'utiliser : « en effet », « cependant », « néanmoins », « il est important de \
 noter », « plongeons dans », « crucial », « véritable », « incontournable », « d'ailleurs », \
 « il convient de », « au cœur de », « décryptage ». Écris comme un rédacteur qui poste à chaud \
-: phrases courtes, direct, oralité maîtrisée.
+: phrases courtes, direct.
 
 ## Structure attendue
-1. `hook` : une ligne d'accroche forte — un fait qui arrête le scroll (chiffre marquant, \
-affirmation qui surprend, ou déclaration choc). Jamais de méta-commentaire du type « info » ou \
-« à lire ». 1 emoji maximum, uniquement si ça renforce vraiment l'accroche.
-2. `paragraph_context` (2-4 phrases) : le contexte — qui, quoi, dans quel cadre.
-3. `paragraph_detail` (2-4 phrases) : ce qui fait la valeur de l'info — détails, réactions, \
-enjeu. Développe au-delà de ce qu'un tweet pourrait dire.
-4. `engagement_question` : une question courte qui invite à réagir en commentaire — jamais un \
-appel générique à liker/partager.
-5. `hashtags` : 2 à 3 hashtags pertinents (ex. #KPop et le nom du groupe), jamais mêlés au \
-texte des paragraphes.
+1. `headline_fr` : une accroche courte et percutante, 10 à 15 mots MAXIMUM — le fait le plus \
+marquant de l'article, formulation choc plutôt qu'une phrase grammaticale complète, jamais de \
+point final.
+2. `key_points_fr` : 2 à 3 points clés COURTS (une phrase chacun, ~15-20 mots), qui \
+COMPLÈTENT l'accroche SANS JAMAIS LA RÉPÉTER — chaque point doit apporter une information \
+distincte (contexte, réaction, conséquence, chiffre) que l'accroche ne dit pas déjà. Si \
+l'article n'offre vraiment que 2 informations distinctes, n'en donne que 2 : mieux vaut 2 \
+points solides qu'un 3e redondant.
 
-AVANT DE RÉPONDRE : relis le hook et les deux paragraphes, vérifie qu'aucune information ne \
-provient d'ailleurs que du titre/extrait/contexte fournis, et que l'artiste/groupe est nommé \
-précisément au moins une fois. Corrige si besoin.
+AVANT DE RÉPONDRE : relis l'accroche et les points clés ensemble — vérifie qu'aucun des deux \
+ne répète l'autre mot pour mot ou en substance. Corrige si besoin.
 
 Exemple de ton attendu (sujet fictif, à ne jamais réutiliser tel quel — sert uniquement à \
 calibrer le style, pas à copier la structure des phrases) :
 {{
-  "hook": "Un comeback annoncé sans prévenir, et déjà un record en vue.",
-  "paragraph_context": "Le groupe vient de confirmer son retour pour le mois prochain, avec \
-un premier extrait dévoilé ce matin. Aucune date n'avait fuité avant l'annonce officielle.",
-  "paragraph_detail": "Les premières réactions sur les réseaux évoquent déjà un potentiel \
-record de pré-sauvegardes pour le label. L'agence promet un concept radicalement différent \
-des sorties précédentes.",
-  "engagement_question": "Vous en pensez quoi de ce changement de direction musicale ?",
-  "hashtags": ["#KPop", "#Comeback"]
+  "headline_fr": "Le groupe confirme un comeback surprise pour le mois prochain",
+  "key_points_fr": [
+    "Un premier extrait a été dévoilé ce matin, sans aucune fuite avant l'annonce officielle.",
+    "L'agence promet un concept radicalement différent des sorties précédentes."
+  ]
 }}
 {page_context_block}
 Réponds uniquement selon le schéma JSON fourni.
@@ -543,17 +539,17 @@ class GeminiAnalyzer:
         user_content = f"Titre : {item.title}\nExtrait : {item.raw_summary}\nLien : {item.url}"
         return self._generate_with_fallback(system_prompt, user_content, WritingResult)
 
-    def write_instagram_news(
+    def write_social_visual(
         self,
         item: ArticleRecord,
         classification: ClassificationResult,
         *,
         page_text: str | None = None,
-    ) -> tuple[InstagramNewsPost, int, int]:
-        """3e appel, dédié (T18, remplace le script TikTok de T14) — Route A et Route CONCERT,
-        appelé par le pipeline sur une instance séparée dont l'ordre des clés API peut différer
-        de celle de classify()/write() (voir pipeline.py `_instagram_news_api_keys`)."""
-        system_prompt = _INSTAGRAM_NEWS_SYSTEM_PROMPT.format(
+    ) -> tuple[SocialVisualContent, int, int]:
+        """3e appel, dédié — remplace le post Instagram (T18). Contrairement à celui-ci, appelé
+        pour TOUTE route retenue (A, B, CONCERT), pas seulement Route A/CONCERT : le visuel
+        social 9:16 couvre tous les articles envoyés (voir pipeline.py, social_pipeline.py)."""
+        system_prompt = _SOCIAL_VISUAL_SYSTEM_PROMPT.format(
             category=classification.category.value,
             importance=classification.importance.value,
             virality=classification.virality.value if classification.virality else "N/A",
@@ -561,7 +557,7 @@ class GeminiAnalyzer:
             page_context_block=_page_context_block(page_text),
         )
         user_content = f"Titre : {item.title}\nExtrait : {item.raw_summary}\nLien : {item.url}"
-        return self._generate_with_fallback(system_prompt, user_content, InstagramNewsPost)
+        return self._generate_with_fallback(system_prompt, user_content, SocialVisualContent)
 
     def ideate_thread_topics(
         self, *, candidate_pairs: list[tuple[str, ThreadConcept]]

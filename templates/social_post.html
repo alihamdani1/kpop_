@@ -4,11 +4,7 @@
   <meta charset="UTF-8">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
   <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
       width: 1080px;
@@ -29,11 +25,28 @@
       overflow: hidden;
     }
 
-    .top-section img {
+    /* Fond flouté (même image, agrandie) : remplit tout le cadre même quand l'image source
+       n'est pas nativement au format vertical (captures d'écran/miniatures 16:9 très
+       fréquentes sur les articles de presse) — même technique qu'un repost Instagram/TikTok
+       d'un contenu qui n'est pas en 9:16 à l'origine. */
+    .image-backdrop {
+      position: absolute;
+      inset: 0;
+      background-size: cover;
+      background-position: center;
+      filter: blur(40px) brightness(0.55);
+      transform: scale(1.15); /* évite de voir le bord flou de l'image en zoomant légèrement */
+    }
+
+    /* Image nette au premier plan — TOUJOURS affichée en entier (object-fit: contain), jamais
+       rognée : contrairement à un cover centré, aucun visage/texte incrusté ne peut être coupé
+       quel que soit le ratio de l'image source. */
+    .image-foreground {
+      position: relative;
+      z-index: 1;
       width: 100%;
       height: 100%;
-      object-fit: cover; /* S'adapte sans déformation */
-      object-position: center 20%;
+      object-fit: contain;
     }
 
     /* Dégradé subtil en bas de l'image pour faire ressortir le logo */
@@ -67,7 +80,8 @@
       flex: 1; /* Prend tout le reste de la hauteur */
       background-color: #FFD43F; /* Le jaune vif signature */
       color: #000000;
-      padding: 60px 80px 100px 80px;
+      /* Bas très généreux : zone de sécurité TikTok/Reels (légende, pseudo, icônes de son). */
+      padding: 56px 64px 170px 64px;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
@@ -85,53 +99,83 @@
       border-color: transparent #1a1a1a transparent transparent;
     }
 
-    /* Tag de Catégorie (ex: POLITIQUE, MUSIQUE, RECORD) */
-    .category-tag {
-      font-size: 28px;
-      font-weight: 900;
-      letter-spacing: 2px;
-      text-transform: uppercase;
-      margin-bottom: 30px;
+    /* Zone de sécurité droite : aucun bloc de texte (badge/titre/date/puces) ne dépasse ~78 %
+       de la largeur du canvas (1080px) — jamais masqué par les boutons like/commentaire/partage
+       de TikTok/Reels, qui occupent la colonne droite de l'écran. */
+    .main-content {
+      max-width: 840px;
     }
 
-    /* Texte principal du tweet */
-    .tweet-text {
-      font-weight: 800;
-      line-height: 1.25;
+    /* Badge de catégorie — nettement plus visible qu'un simple texte : conteneur contrasté
+       fond blanc/texte noir, bien plus grand qu'avant. */
+    .category-badge {
+      display: inline-block;
+      background-color: #000000;
+      color: #ffffff;
+      font-size: 50px;
+      font-weight: 900;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 12px 28px;
+      margin-bottom: 36px;
+    }
+
+    /* Titre principal — accroche courte (10-15 mots), grande taille, tout en majuscules. */
+    .headline {
+      font-weight: 900;
+      text-transform: uppercase;
+      line-height: 1.15;
       letter-spacing: -1px;
       color: #000000;
       white-space: pre-wrap;
       word-wrap: break-word;
     }
 
-    /* Paliers choisis en Python (visual_generator._font_size_class) selon la longueur du texte —
-       46px est la taille d'origine du gabarit, réduite sur les tweets plus longs pour ne jamais
-       déborder du bloc jaune (pas de scroll possible sur une capture d'écran). */
-    .text-lg { font-size: 46px; }
-    .text-md { font-size: 38px; }
-    .text-sm { font-size: 32px; }
+    /* Paliers choisis en Python (visual_generator._font_size_class) selon la longueur de
+       l'accroche — garantit 2 à 3 lignes maximum, jamais de débordement du bloc jaune (pas de
+       scroll possible sur une capture d'écran). */
+    .headline.text-lg { font-size: 76px; }
+    .headline.text-md { font-size: 62px; }
+    .headline.text-sm { font-size: 50px; }
 
-    /* Date et Heure */
+    /* Date — jour/mois/année seuls (pas d'heure), style sobre et discret. */
     .timestamp {
-      margin-top: 30px;
-      font-size: 26px;
+      margin-top: 28px;
+      font-size: 30px;
       font-weight: 600;
-      color: rgba(0, 0, 0, 0.7);
+      color: rgba(0, 0, 0, 0.65);
     }
 
-    /* Call to action du bas (TikTok / Insta Swipe) */
-    .footer-cta {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-size: 28px;
+    /* Points clés (optionnels) — support de lecture rapide, taille intermédiaire entre le
+       titre et la date. */
+    .key-points {
+      list-style: none;
+      margin-top: 32px;
+    }
+
+    .key-points li {
+      font-size: 34px;
       font-weight: 700;
-      color: #000000;
-      padding-bottom: 40px; /* Safe zone basse */
+      line-height: 1.3;
+      margin-bottom: 14px;
+      padding-left: 36px;
+      position: relative;
     }
 
-    .footer-cta span.arrow {
-      font-size: 24px;
+    .key-points li::before {
+      content: "•";
+      position: absolute;
+      left: 0;
+      color: #000000;
+    }
+
+    /* Call-to-action de fin — centré, largement au-dessus du bord bas (voir le padding généreux
+       de .bottom-section). */
+    .footer-cta {
+      text-align: center;
+      font-size: 32px;
+      font-weight: 800;
+      color: #000000;
     }
   </style>
 </head>
@@ -139,7 +183,8 @@
 
   <!-- PARTIE HAUTE : IMAGE ET MARQUE -->
   <div class="top-section">
-    <img src="{{ image_data_uri }}" alt="">
+    <div class="image-backdrop" style="background-image: url({{ image_data_uri }});"></div>
+    <img class="image-foreground" src="{{ image_data_uri }}" alt="">
     <div class="image-overlay"></div>
     <div class="brand-logo">RUAN!</div>
   </div>
@@ -149,14 +194,19 @@
     <div class="cut-corner"></div>
 
     <div class="main-content">
-      <div class="category-tag">{{ category_label }}</div>
-      <div class="tweet-text {{ font_size_class }}">{{ tweet_text }}</div>
+      <div class="category-badge">{{ category_label }}</div>
+      <div class="headline {{ headline_size_class }}">{{ headline }}</div>
       <div class="timestamp">{{ formatted_date }}</div>
+      {% if key_points %}
+      <ul class="key-points">
+        {% for point in key_points %}
+        <li>{{ point }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
     </div>
 
-    <div class="footer-cta">
-      <span class="arrow">▲</span> Glissez vers la gauche pour en savoir plus
-    </div>
+    <div class="footer-cta">Abonnez-vous à RUAN! pour plus d'actualités K-pop</div>
   </div>
 
 </body>

@@ -15,9 +15,9 @@ from kpop_bot.models import (
     ClassificationResult,
     FetchedItem,
     Importance,
-    InstagramNewsPost,
     Route,
     SelectionStatus,
+    SocialVisualContent,
     ThreadAngle,
     ThreadRecord,
     ThreadSelectionRecord,
@@ -50,11 +50,8 @@ CREATE TABLE IF NOT EXISTS articles (
     summary_fr       TEXT,
     video_summary    TEXT,
     tweet_draft      TEXT,
-    instagram_hook                  TEXT,
-    instagram_paragraph_context     TEXT,
-    instagram_paragraph_detail      TEXT,
-    instagram_engagement_question   TEXT,
-    instagram_hashtags              TEXT NOT NULL DEFAULT '[]',
+    headline_fr      TEXT,
+    key_points_fr    TEXT NOT NULL DEFAULT '[]',
     extra_image_urls TEXT NOT NULL DEFAULT '[]',
     artists          TEXT NOT NULL DEFAULT '[]',
     tokens_in        INTEGER NOT NULL DEFAULT 0,
@@ -124,17 +121,18 @@ CREATE INDEX IF NOT EXISTS idx_threads_status ON threads (status);
 # fois les bases déjà existantes (ALTER TABLE) et les bases neuves (déjà créées avec ces
 # colonnes par _SCHEMA ci-dessus, donc ce bloc est un no-op pour elles).
 #
-# Les anciennes colonnes tiktok_* (T14) ne sont PAS supprimées ici — SQLite ALTER TABLE DROP
-# COLUMN est disponible mais une suppression reste irréversible sur une base de production ;
-# elles restent simplement inutilisées désormais (remplacées par instagram_*, voir T18), même
-# principe que thread_topics.concept_id resté NULL pour les lignes historiques.
+# Les anciennes colonnes tiktok_* (T14) puis instagram_* (T18) ne sont PAS supprimées ici —
+# SQLite ALTER TABLE DROP COLUMN est disponible mais une suppression reste irréversible sur une
+# base de production ; elles restent simplement inutilisées désormais (remplacées par
+# headline_fr/key_points_fr, voir SocialVisualContent), même principe que
+# thread_topics.concept_id resté NULL pour les lignes historiques.
 _MIGRATED_COLUMNS = {
-    "instagram_hook": "TEXT",
-    "instagram_paragraph_context": "TEXT",
-    "instagram_paragraph_detail": "TEXT",
-    "instagram_engagement_question": "TEXT",
-    "instagram_hashtags": "TEXT NOT NULL DEFAULT '[]'",
     "extra_image_urls": "TEXT NOT NULL DEFAULT '[]'",
+    # Accroche + points clés dédiés au visuel social (3e appel IA, SocialVisualContent),
+    # distincts de summary_fr. NULL/'[]' pour les articles déjà en base avant cette colonne —
+    # social_pipeline._fallback_headline/_fallback_key_points prennent le relais dans ce cas.
+    "headline_fr": "TEXT",
+    "key_points_fr": "TEXT NOT NULL DEFAULT '[]'",
 }
 
 # Colonne ajoutée après coup sur `thread_topics` (T15bis — idéation hybride) : cette table est
@@ -238,25 +236,24 @@ def save_analysis(
     tokens_in: int,
     tokens_out: int,
     prompt_version: str,
-    instagram_news: InstagramNewsPost | None = None,
+    social_visual: SocialVisualContent | None = None,
     image_url: str | None = None,
     extra_image_urls: list[str] | None = None,
 ) -> None:
     """Enregistre le résultat des appels IA. `writing` est None quand route == IGNORED (bruit
-    inutile) — dans ce cas le statut final est FILTERED, sinon ANALYZED. `instagram_news` reste
-    None hors Route A/CONCERT ou si le salon dédié n'est pas configuré (voir T18) — colonnes
-    laissées NULL, aucun impact sur le reste de l'enregistrement. `image_url`/`extra_image_urls`
-    (T18, scraper.py) : passer `image_url` uniquement si le scraping a trouvé mieux que l'image
-    déjà connue (RSS) — None laisse la colonne inchangée plutôt que d'écraser une valeur utile."""
+    inutile) — dans ce cas le statut final est FILTERED, sinon ANALYZED. `social_visual` reste
+    None si le salon de prévisualisation n'est pas configuré (voir social_pipeline.py) — colonnes
+    laissées NULL/'[]', aucun impact sur le reste de l'enregistrement (le visuel se rabat alors
+    sur un repli dérivé de summary_fr). `image_url`/`extra_image_urls` (scraper.py) : passer
+    `image_url` uniquement si le scraping a trouvé mieux que l'image déjà connue (RSS) — None
+    laisse la colonne inchangée plutôt que d'écraser une valeur utile."""
     status = ArticleStatus.FILTERED if route == Route.IGNORED else ArticleStatus.ANALYZED
     conn.execute(
         """
         UPDATE articles SET
             status = ?, category = ?, importance = ?, virality = ?, virality_reason = ?,
             route = ?, france_override = ?, summary_fr = ?, video_summary = ?,
-            tweet_draft = ?, instagram_hook = ?, instagram_paragraph_context = ?,
-            instagram_paragraph_detail = ?, instagram_engagement_question = ?,
-            instagram_hashtags = ?, artists = ?,
+            tweet_draft = ?, headline_fr = ?, key_points_fr = ?, artists = ?,
             image_url = COALESCE(?, image_url), extra_image_urls = ?,
             tokens_in = tokens_in + ?, tokens_out = tokens_out + ?, prompt_version = ?,
             error = NULL
@@ -273,11 +270,8 @@ def save_analysis(
             writing.summary_fr if writing else None,
             writing.video_summary if writing else None,
             writing.tweet_draft if writing else None,
-            instagram_news.hook if instagram_news else None,
-            instagram_news.paragraph_context if instagram_news else None,
-            instagram_news.paragraph_detail if instagram_news else None,
-            instagram_news.engagement_question if instagram_news else None,
-            json.dumps(instagram_news.hashtags, ensure_ascii=False) if instagram_news else "[]",
+            social_visual.headline_fr if social_visual else None,
+            json.dumps(social_visual.key_points_fr, ensure_ascii=False) if social_visual else "[]",
             json.dumps(classification.artists, ensure_ascii=False),
             image_url,
             json.dumps(extra_image_urls or [], ensure_ascii=False),
@@ -357,13 +351,8 @@ def _row_to_record(row: sqlite3.Row) -> ArticleRecord:
         summary_fr=row["summary_fr"],
         video_summary=row["video_summary"],
         tweet_draft=row["tweet_draft"],
-        instagram_hook=row["instagram_hook"],
-        instagram_paragraph_context=row["instagram_paragraph_context"],
-        instagram_paragraph_detail=row["instagram_paragraph_detail"],
-        instagram_engagement_question=row["instagram_engagement_question"],
-        instagram_hashtags=json.loads(row["instagram_hashtags"])
-        if row["instagram_hashtags"]
-        else [],
+        headline_fr=row["headline_fr"],
+        key_points_fr=json.loads(row["key_points_fr"]) if row["key_points_fr"] else [],
         artists=json.loads(row["artists"]) if row["artists"] else [],
         image_url=row["image_url"],
         extra_image_urls=json.loads(row["extra_image_urls"]) if row["extra_image_urls"] else [],

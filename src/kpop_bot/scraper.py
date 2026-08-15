@@ -1,7 +1,7 @@
 """Scraping best-effort de la page article (T18) — vient compléter l'extrait RSS, souvent trop
 court pour porter une information précise (ex. le nom de l'idole n'apparaît que dans le corps
 de l'article, jamais dans le titre ni l'extrait — voir TODO.md T18). Utilisé par `pipeline.py`
-pour enrichir `classify()`/`write()`/`write_instagram_news()`, et pour trouver une image
+pour enrichir `classify()`/`write()`/`write_social_visual()`, et pour trouver une image
 principale plus fiable que l'extraction RSS existante (`fetcher._extract_image_url`).
 
 Best-effort partout : `fetch_article_page` ne lève jamais. Un site injoignable, une page sans

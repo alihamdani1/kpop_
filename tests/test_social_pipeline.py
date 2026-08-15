@@ -9,13 +9,12 @@ import respx
 
 from kpop_bot import social_pipeline, storage
 from kpop_bot.models import (
-    TWEET_TAG_LABELS,
     Category,
     ClassificationResult,
     FetchedItem,
     Importance,
     Route,
-    TweetTag,
+    SocialVisualContent,
     Virality,
     WritingResult,
 )
@@ -43,7 +42,12 @@ def settings(tmp_path: Path) -> Settings:
 
 
 def _seed_sent_article(
-    settings: Settings, *, image_url: str | None = None, artists: list[str] | None = None
+    settings: Settings,
+    *,
+    image_url: str | None = None,
+    artists: list[str] | None = None,
+    headline_fr: str = "Un titre de test",
+    key_points_fr: list[str] | None = None,
 ) -> int:
     """Un seul article SENT par test — un fingerprint fixe suffit, chaque test utilise sa propre
     base (`settings.db_path` sous `tmp_path`)."""
@@ -68,7 +72,21 @@ def _seed_sent_article(
         artists=artists or [],
     )
     writing = WritingResult(summary_fr="Résumé.", tweet_draft="Un tweet de test.")
-    storage.save_analysis(conn, article_id, classification, Route.B, False, writing, 10, 5, "v1")
+    social_visual = SocialVisualContent(
+        headline_fr=headline_fr, key_points_fr=key_points_fr or ["Point 1.", "Point 2."]
+    )
+    storage.save_analysis(
+        conn,
+        article_id,
+        classification,
+        Route.B,
+        False,
+        writing,
+        10,
+        5,
+        "v1",
+        social_visual=social_visual,
+    )
     storage.mark_sent(conn, article_id)
     conn.close()
     return article_id
@@ -81,7 +99,7 @@ class _FakeRenderer:
 
     def __init__(self, template_path: Path) -> None:
         self.template_path = template_path
-        self.calls: list[tuple[bytes, str, str, str]] = []
+        self.calls: list[tuple[bytes, str, list[str], str, str]] = []
         self.raise_on_render = False
         _FakeRenderer.instances.append(self)
 
@@ -92,11 +110,17 @@ class _FakeRenderer:
         return None
 
     def render(
-        self, *, image_bytes: bytes, tweet_text: str, category_label: str, formatted_date: str
+        self,
+        *,
+        image_bytes: bytes,
+        headline: str,
+        key_points: list[str],
+        category_label: str,
+        formatted_date: str,
     ) -> bytes:
         if self.raise_on_render:
             raise RuntimeError("échec de rendu simulé")
-        self.calls.append((image_bytes, tweet_text, category_label, formatted_date))
+        self.calls.append((image_bytes, headline, key_points, category_label, formatted_date))
         return b"fake-png-bytes"
 
 
@@ -135,7 +159,7 @@ def test_run_social_visuals_envoie_avec_image_rss(settings, monkeypatch):
     assert stats.skipped_no_image == 0
     [renderer] = _FakeRenderer.instances
     assert renderer.calls == [
-        (b"rss-bytes", "Un tweet de test.", "RELEASE", "24 juillet 2026 · 00h00")
+        (b"rss-bytes", "Un titre de test", ["Point 1.", "Point 2."], "RELEASE", "24 juillet 2026")
     ]
 
     conn = storage.init_db(settings.db_path)
@@ -163,7 +187,13 @@ def test_run_social_visuals_repli_media_library_si_pas_image_rss(settings, monke
     assert stats.sent == 1
     [renderer] = _FakeRenderer.instances
     assert renderer.calls == [
-        (b"media-library-bytes", "Un tweet de test.", "RELEASE", "24 juillet 2026 · 00h00")
+        (
+            b"media-library-bytes",
+            "Un titre de test",
+            ["Point 1.", "Point 2."],
+            "RELEASE",
+            "24 juillet 2026",
+        )
     ]
 
 
@@ -319,6 +349,9 @@ def _make_record(
     importance: Importance | None = None,
     virality: Virality | None = None,
     tweet_draft: str = "Tweet.",
+    headline_fr: str | None = None,
+    key_points_fr: list[str] | None = None,
+    summary_fr: str | None = None,
     published_at: dt.datetime | None = None,
 ):
     from kpop_bot.models import ArticleRecord, ArticleStatus
@@ -338,56 +371,105 @@ def _make_record(
         importance=importance,
         virality=virality,
         tweet_draft=tweet_draft,
+        headline_fr=headline_fr,
+        key_points_fr=key_points_fr or [],
+        summary_fr=summary_fr,
         artists=artists,
         image_url=image_url,
         created_at=now,
     )
 
 
-# --- _format_date_fr / _category_label_and_body en isolation. ---
+# --- _format_date_fr / _category_label en isolation. ---
 
 
-def test_format_date_fr():
+def test_format_date_fr_sans_heure():
     moment = dt.datetime(2026, 8, 14, 10, 7, tzinfo=dt.UTC)
-    assert social_pipeline._format_date_fr(moment) == "14 août 2026 · 10h07"
+    assert social_pipeline._format_date_fr(moment) == "14 août 2026"
 
 
-def test_category_label_and_body_tweet_non_tague():
-    """tweet_draft sans préfixe tag (ex. en base avant T5quater, ou construit hors pipeline) —
-    le corps reste inchangé, l'étiquette est simplement dérivée de category/importance/virality."""
+# --- _fallback_headline / _headline_text / _key_points en isolation. ---
+
+
+def test_fallback_headline_tronque_a_14_mots():
+    summary = " ".join(f"mot{i}" for i in range(20))
+    headline = social_pipeline._fallback_headline(summary)
+    assert headline == " ".join(f"mot{i}" for i in range(14))
+
+
+def test_fallback_headline_retire_la_ponctuation_finale():
+    assert social_pipeline._fallback_headline("Un résumé court.") == "Un résumé court"
+
+
+def test_headline_text_utilise_headline_fr_si_present():
+    article = _make_record(
+        image_url=None, artists=[], headline_fr="Une accroche dédiée", summary_fr="Résumé complet."
+    )
+    assert social_pipeline._headline_text(article) == "Une accroche dédiée"
+
+
+def test_headline_text_repli_sur_summary_fr_si_headline_fr_absent():
+    """Articles migrés avant l'introduction de headline_fr (colonne NULL) — voir
+    storage._MIGRATED_COLUMNS."""
+    article = _make_record(
+        image_url=None, artists=[], headline_fr=None, summary_fr="Résumé complet."
+    )
+    assert social_pipeline._headline_text(article) == "Résumé complet"
+
+
+def test_fallback_key_points_decoupe_summary_fr_en_phrases():
+    points = social_pipeline._fallback_key_points("Première phrase. Deuxième phrase.")
+    assert points == ["Première phrase.", "Deuxième phrase."]
+
+
+def test_fallback_key_points_liste_vide_si_summary_fr_absent():
+    assert social_pipeline._fallback_key_points("") == []
+
+
+def test_fallback_key_points_plafonne_a_3():
+    summary = ". ".join(f"Phrase {i}" for i in range(5)) + "."
+    assert len(social_pipeline._fallback_key_points(summary)) == 3
+
+
+def test_key_points_utilise_key_points_fr_si_present():
+    """Rédigés ensemble avec headline_fr par SocialVisualContent — préférés au découpage
+    mécanique de summary_fr, qui peut se répéter avec le titre (voir cahier des charges)."""
     article = _make_record(
         image_url=None,
         artists=[],
-        category=Category.COMEBACK_SORTIE,
-        importance=Importance.MODERE,
-        virality=Virality.MODERE,
-        tweet_draft="Un tweet sans tag.",
+        key_points_fr=["Un vrai point clé.", "Un autre, distinct du titre."],
+        summary_fr="Un résumé qui ne devrait pas être utilisé ici.",
     )
-    label, body = social_pipeline._category_label_and_body(article)
-    assert label == "RELEASE"
-    assert body == "Un tweet sans tag."
+    assert social_pipeline._key_points(article) == [
+        "Un vrai point clé.",
+        "Un autre, distinct du titre.",
+    ]
 
 
-def test_category_label_and_body_retire_le_prefixe_tague():
-    """tweet_draft tel que réellement stocké par pipeline.py (T5quater) : préfixé par le label
-    complet avec emoji. Le préfixe doit être retiré du corps affiché dans le visuel, pour ne pas
-    apparaître deux fois (une fois comme category-tag, une fois dans le texte)."""
-    prefixed = f"{TWEET_TAG_LABELS[TweetTag.GOSSIP]}\n\nUne rumeur circule sur le groupe."
+def test_key_points_repli_sur_summary_fr_si_key_points_fr_absent():
+    """Articles migrés avant l'introduction de key_points_fr (colonne '[]' en base), ou échec
+    du 3e appel Gemini — voir run_social_visuals."""
+    article = _make_record(
+        image_url=None, artists=[], key_points_fr=None, summary_fr="Première phrase. Deuxième."
+    )
+    assert social_pipeline._key_points(article) == ["Première phrase.", "Deuxième."]
+
+
+def test_category_label_derive_depuis_classification():
+    """Même fonction pure que le tag préfixé au tweet Twitter (T5quater) — cohérence garantie
+    entre les deux, aucun appel IA supplémentaire."""
     article = _make_record(
         image_url=None,
         artists=[],
         category=Category.SCANDALE_DRAMA,
         importance=Importance.MODERE,
         virality=Virality.MODERE,
-        tweet_draft=prefixed,
     )
-    label, body = social_pipeline._category_label_and_body(article)
-    assert label == "GOSSIP"
-    assert body == "Une rumeur circule sur le groupe."
+    assert social_pipeline._category_label(article) == "GOSSIP"
 
 
-def test_category_label_and_body_repli_info_si_category_absente():
-    article = _make_record(image_url=None, artists=[], tweet_draft="Tweet sans classification.")
-    label, body = social_pipeline._category_label_and_body(article)
-    assert label == "INFO"
-    assert body == "Tweet sans classification."
+def test_category_label_repli_info_si_classification_absente():
+    """Ne devrait jamais arriver pour un article SENT (category/importance toujours fixés par
+    save_analysis) — filet défensif plutôt qu'une exception."""
+    article = _make_record(image_url=None, artists=[])
+    assert social_pipeline._category_label(article) == "INFO"

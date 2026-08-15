@@ -32,10 +32,8 @@ class CycleStats:
     analysis_failed: int = 0
     sent: int = 0
     send_failed: int = 0
-    instagram_news_generated: int = 0
-    instagram_news_generation_failed: int = 0
-    instagram_news_sent: int = 0
-    instagram_news_send_failed: int = 0
+    social_visual_content_generated: int = 0
+    social_visual_content_generation_failed: int = 0
     scraped_pages: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
@@ -53,9 +51,8 @@ class CycleStats:
             f"échecs_analyse={self.analysis_failed} "
             f"envoyés={self.sent} échecs_envoi={self.send_failed} "
             f"pages_scrapees={self.scraped_pages} "
-            f"ig_news_generes={self.instagram_news_generated} ig_news_echecs_gen="
-            f"{self.instagram_news_generation_failed} ig_news_envoyes={self.instagram_news_sent} "
-            f"ig_news_echecs_envoi={self.instagram_news_send_failed} "
+            f"visuel_social_genere={self.social_visual_content_generated} "
+            f"visuel_social_echecs_gen={self.social_visual_content_generation_failed} "
             f"filet_france={self.france_overrides} filet_record={self.milestone_flags} "
             f"tokens_in={self.tokens_in} tokens_out={self.tokens_out}"
         )
@@ -66,15 +63,6 @@ def _api_keys(settings: Settings) -> list[str]:
     if settings.gemini_api_key_2:
         keys.append(settings.gemini_api_key_2)
     return keys
-
-
-def _instagram_news_api_keys(settings: Settings) -> list[str]:
-    """Mêmes clés que l'analyseur principal, mais clé 2 en priorité si elle est présente (même
-    principe qu'en T14) — la génération du post Instagram (Route A/CONCERT, volume plus
-    faible) utilise ainsi en priorité un pool de quota distinct de classify()/write(), plutôt
-    que de n'intervenir qu'en dernier recours comme le prévoit la chaîne de secours par
-    défaut."""
-    return list(reversed(_api_keys(settings)))
 
 
 def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
@@ -102,18 +90,6 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
         models=models_chain,
         artist_tiers=artist_tiers,
         min_seconds_between_calls=settings.gemini_min_seconds_between_calls,
-    )
-    # Instance séparée, clé 2 en priorité — voir _instagram_news_api_keys. None si le salon
-    # dédié n'est pas configuré : aucune instance construite, aucun appel Gemini supplémentaire.
-    gemini_instagram_news = (
-        analyzer.GeminiAnalyzer(
-            api_keys=_instagram_news_api_keys(settings),
-            models=models_chain,
-            artist_tiers=artist_tiers,
-            min_seconds_between_calls=settings.gemini_min_seconds_between_calls,
-        )
-        if settings.discord_webhook_instagram_news
-        else None
     )
 
     pending_new = storage.pending(conn, ArticleStatus.NEW, limit=limit)
@@ -180,29 +156,31 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
                 stats.errors.append(f"write({article.url}): {exc}")
                 continue
 
-        instagram_news_result = None
+        social_visual_result = None
         tin3 = tout3 = 0
-        if route in (Route.A, Route.CONCERT) and gemini_instagram_news is not None:
-            # Échec non bloquant : le tweet/résumé vidéo a déjà réussi, un post Instagram raté
-            # ne doit ni faire échouer l'article ni arrêter le cycle — c'est un bonus, pas un
-            # pré-requis de diffusion (même principe qu'en T14).
+        if route != Route.IGNORED and settings.discord_webhook_social:
+            # Échec non bloquant : le tweet/résumé a déjà réussi, un raté ici ne doit ni faire
+            # échouer l'article ni arrêter le cycle — c'est un bonus pour social_pipeline.py,
+            # pas un pré-requis de diffusion (même principe que pour l'ex-post Instagram).
+            # Toutes les routes retenues sont concernées (A, B, CONCERT) : le visuel social
+            # couvre tous les articles envoyés, pas seulement Route A/CONCERT.
             try:
-                instagram_news_result, tin3, tout3 = gemini_instagram_news.write_instagram_news(
+                social_visual_result, tin3, tout3 = gemini.write_social_visual(
                     article, classification, page_text=page_text
                 )
-                stats.instagram_news_generated += 1
+                stats.social_visual_content_generated += 1
             except analyzer.QuotaExceededError:
                 logger.warning(
-                    "Quota Gemini (post Instagram) atteint pour %s — post ignoré pour cet "
+                    "Quota Gemini (visuel social) atteint pour %s — contenu ignoré pour cet "
                     "article, cycle poursuivi.",
                     article.url,
                 )
-                stats.instagram_news_generation_failed += 1
+                stats.social_visual_content_generation_failed += 1
             except analyzer.AnalysisError as exc:
                 logger.warning(
-                    "Échec de génération du post Instagram pour %s : %s", article.url, exc
+                    "Échec de génération du contenu visuel social pour %s : %s", article.url, exc
                 )
-                stats.instagram_news_generation_failed += 1
+                stats.social_visual_content_generation_failed += 1
 
         storage.save_analysis(
             conn,
@@ -214,7 +192,7 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
             tin1 + tin2 + tin3,
             tout1 + tout2 + tout3,
             analyzer.PROMPT_VERSION,
-            instagram_news=instagram_news_result,
+            social_visual=social_visual_result,
             image_url=scraped.main_image_url if scraped else None,
             extra_image_urls=scraped.extra_image_urls if scraped else None,
         )
@@ -232,7 +210,6 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
 
     to_send = storage.pending(conn, ArticleStatus.ANALYZED)
     send_index = 0  # numérote uniquement les envois réels, voir notifier.build_info_header
-    instagram_news_send_index = 0  # compteur séparé — voir notifier.notify_instagram_news
     for article in to_send:
         if dry_run:
             route_label = article.route.value if article.route else "?"
@@ -255,26 +232,6 @@ def run_cycle(settings: Settings, *, limit: int, dry_run: bool) -> CycleStats:
             stats.send_failed += 1
             stats.errors.append(f"send({article.url}): {exc}")
             continue
-
-        # Envoi Instagram best-effort, uniquement après un envoi principal réussi ci-dessus — un
-        # échec ici ne doit jamais faire revenir l'article en arrière (même principe qu'en T14).
-        if (
-            settings.discord_webhook_instagram_news
-            and article.route in (Route.A, Route.CONCERT)
-            and article.instagram_hook
-        ):
-            instagram_news_send_index += 1
-            try:
-                notifier.notify_instagram_news(
-                    article,
-                    url=settings.discord_webhook_instagram_news,
-                    timeout=settings.request_timeout_seconds,
-                    index=instagram_news_send_index,
-                )
-                stats.instagram_news_sent += 1
-            except notifier.NotificationError as exc:
-                stats.instagram_news_send_failed += 1
-                stats.errors.append(f"instagram_news_send({article.url}): {exc}")
 
     if settings.discord_webhook_info_a_verifier:
         to_review = storage.pending(conn, ArticleStatus.FILTERED)

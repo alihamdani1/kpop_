@@ -15,13 +15,13 @@ from kpop_bot.models import (
     ClassificationResult,
     FetchedItem,
     Importance,
-    InstagramNewsPost,
     Route,
+    SocialVisualContent,
     TweetTag,
     Virality,
     WritingResult,
 )
-from kpop_bot.pipeline import _instagram_news_api_keys, resend_sent, run_cycle
+from kpop_bot.pipeline import resend_sent, run_cycle
 from kpop_bot.settings import Settings
 
 
@@ -29,8 +29,8 @@ from kpop_bot.settings import Settings
 def settings(tmp_path: Path) -> Settings:
     """Tous les champs optionnels sont explicités (même à None) pour rester isolé d'un vrai
     `.env` local qui les définirait — sinon un test peut silencieusement déclencher un vrai
-    appel réseau (voir T14 : `DISCORD_WEBHOOK_INSTAGRAM_NEWS` dans `.env` a fait échouer un
-    test qui ne s'y attendait pas, faute de cette isolation explicite)."""
+    appel réseau (voir T14 : un webhook optionnel laissé dans `.env` a fait échouer un test
+    qui ne s'y attendait pas, faute de cette isolation explicite)."""
     return Settings(
         gemini_api_key="test-key",
         gemini_api_key_2=None,
@@ -38,7 +38,7 @@ def settings(tmp_path: Path) -> Settings:
         discord_webhook_route_b="https://discord.com/api/webhooks/fake/b",
         discord_webhook_concert=None,
         discord_webhook_info_a_verifier=None,
-        discord_webhook_instagram_news=None,
+        discord_webhook_social=None,
         db_path=tmp_path / "test.db",
     )
 
@@ -329,18 +329,10 @@ def test_run_cycle_sans_webhook_verif_laisse_les_articles_filtres_intacts(
     assert record.category == Category.BRUIT_INUTILE
 
 
-# --- T18 (remplace T14) : post Instagram dédié (Route A/CONCERT), clé 2 en priorité, salon
-# séparé. ---
-
-
-def test_instagram_news_api_keys_inverse_l_ordre_si_2e_cle_presente(settings):
-    s = settings.model_copy(update={"gemini_api_key": "clé-1", "gemini_api_key_2": "clé-2"})
-    assert _instagram_news_api_keys(s) == ["clé-2", "clé-1"]
-
-
-def test_instagram_news_api_keys_sans_2e_cle_ne_contient_que_la_premiere(settings):
-    s = settings.model_copy(update={"gemini_api_key": "clé-1", "gemini_api_key_2": None})
-    assert _instagram_news_api_keys(s) == ["clé-1"]
+# --- Contenu du visuel social (SocialVisualContent, remplace le post Instagram T18) : toute
+# route retenue (A, B, CONCERT), salon dédié `discord_webhook_social`, même instance Gemini
+# que classify()/write() (pas de priorité de clé dédiée — le volume couvre désormais la
+# majorité du trafic quotidien, contrairement à l'ex-post Instagram réservé à Route A/CONCERT).
 
 
 def _seed_two_articles(settings: Settings) -> None:
@@ -395,69 +387,73 @@ def _fake_write(self, item, classification, route, *, page_text=None):
 
 
 @respx.mock
-def test_run_cycle_genere_le_post_instagram_uniquement_pour_route_a(
+def test_run_cycle_genere_le_contenu_visuel_social_pour_toutes_les_routes_retenues(
     settings, tmp_path, monkeypatch
 ):
+    """Contrairement à l'ex-post Instagram (Route A/CONCERT uniquement), le contenu du visuel
+    social est généré pour TOUTE route retenue — ici Route CONCERT (article 1) et Route B
+    (article 2), voir _fake_classify_route_a_ou_b."""
     sources_path = tmp_path / "sources.yaml"
     sources_path.write_text("sources: []\n", encoding="utf-8")
     artist_tiers_path = tmp_path / "artist_tiers.yaml"
     artist_tiers_path.write_text("{}\n", encoding="utf-8")
-    instagram_url = "https://discord.com/api/webhooks/fake/instagram"
+    social_url = "https://discord.com/api/webhooks/fake/social"
     settings = settings.model_copy(
         update={
             "sources_path": sources_path,
             "artist_tiers_path": artist_tiers_path,
-            "discord_webhook_instagram_news": instagram_url,
+            "discord_webhook_social": social_url,
         }
     )
     _seed_two_articles(settings)
 
-    instagram_calls: list[str] = []
+    social_visual_calls: list[str] = []
 
-    def _fake_write_instagram_news(self, item, classification, *, page_text=None):
-        instagram_calls.append(item.url)
+    def _fake_write_social_visual(self, item, classification, *, page_text=None):
+        social_visual_calls.append(item.url)
         return (
-            InstagramNewsPost(
-                hook="H.",
-                paragraph_context="C.",
-                paragraph_detail="D.",
-                engagement_question="Q ?",
-                hashtags=["#kpop", "#comeback"],
-            ),
+            SocialVisualContent(headline_fr="Titre.", key_points_fr=["Point 1.", "Point 2."]),
             5,
             3,
         )
 
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "classify", _fake_classify_route_a_ou_b)
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "write", _fake_write)
-    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_instagram_news", _fake_write_instagram_news)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_social_visual", _fake_write_social_visual)
     respx.post(settings.discord_webhook_route_a).mock(return_value=httpx.Response(204))
     respx.post(settings.discord_webhook_route_b).mock(return_value=httpx.Response(204))
-    respx.post(instagram_url).mock(return_value=httpx.Response(204))
 
     stats = run_cycle(settings, limit=10, dry_run=False)
 
-    assert instagram_calls == ["https://www.soompi.com/article/route-a"]
-    assert stats.instagram_news_generated == 1
-    assert stats.instagram_news_sent == 1
+    assert sorted(social_visual_calls) == [
+        "https://www.soompi.com/article/route-a",
+        "https://www.soompi.com/article/route-b",
+    ]
+    assert stats.social_visual_content_generated == 2
+
+    conn = storage.init_db(settings.db_path)
+    sent = storage.pending(conn, ArticleStatus.SENT)
+    conn.close()
+    assert {record.headline_fr for record in sent} == {"Titre."}
+    assert all(record.key_points_fr == ["Point 1.", "Point 2."] for record in sent)
 
 
 @respx.mock
-def test_run_cycle_echec_generation_instagram_news_n_empeche_pas_l_envoi_principal(
+def test_run_cycle_echec_generation_visuel_social_n_empeche_pas_l_envoi_principal(
     settings, tmp_path, monkeypatch
 ):
-    """Un post Instagram raté est un bonus perdu, pas une raison de marquer l'article FAILED
-    ni d'arrêter le cycle — même principe qu'en T14."""
+    """Un échec de génération du contenu visuel social est un bonus perdu, pas une raison de
+    marquer l'article FAILED ni d'arrêter le cycle — même principe qu'en T14/T18."""
     sources_path = tmp_path / "sources.yaml"
     sources_path.write_text("sources: []\n", encoding="utf-8")
     artist_tiers_path = tmp_path / "artist_tiers.yaml"
     artist_tiers_path.write_text("{}\n", encoding="utf-8")
-    instagram_url = "https://discord.com/api/webhooks/fake/instagram"
+    social_url = "https://discord.com/api/webhooks/fake/social"
     settings = settings.model_copy(
         update={
             "sources_path": sources_path,
             "artist_tiers_path": artist_tiers_path,
-            "discord_webhook_instagram_news": instagram_url,
+            "discord_webhook_social": social_url,
         }
     )
     conn = storage.init_db(settings.db_path)
@@ -479,22 +475,19 @@ def test_run_cycle_echec_generation_instagram_news_n_empeche_pas_l_envoi_princip
 
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "classify", _fake_classify_route_a_ou_b)
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "write", _fake_write)
-    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_instagram_news", _raise_analysis_error)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_social_visual", _raise_analysis_error)
     respx.post(settings.discord_webhook_route_a).mock(return_value=httpx.Response(204))
 
     stats = run_cycle(settings, limit=10, dry_run=False)
 
-    assert stats.instagram_news_generation_failed == 1
+    assert stats.social_visual_content_generation_failed == 1
     assert stats.analysis_failed == 0  # l'article lui-même n'est pas en échec
-    assert stats.sent == 1  # envoyé normalement malgré l'échec du post Instagram
+    assert stats.sent == 1  # envoyé normalement malgré l'échec de génération du visuel social
 
 
 @respx.mock
-def test_run_cycle_sans_webhook_instagram_news_ne_genere_ni_n_envoie_rien(
-    settings, tmp_path, monkeypatch
-):
-    """Comportement par défaut (webhook non configuré) inchangé : aucun 3e appel Gemini,
-    aucun envoi vers un salon Instagram — même principe qu'en T14."""
+def test_run_cycle_sans_webhook_social_ne_genere_rien(settings, tmp_path, monkeypatch):
+    """Comportement par défaut (webhook non configuré) inchangé : aucun 3e appel Gemini."""
     sources_path = tmp_path / "sources.yaml"
     sources_path.write_text("sources: []\n", encoding="utf-8")
     artist_tiers_path = tmp_path / "artist_tiers.yaml"
@@ -503,24 +496,23 @@ def test_run_cycle_sans_webhook_instagram_news_ne_genere_ni_n_envoie_rien(
         update={
             "sources_path": sources_path,
             "artist_tiers_path": artist_tiers_path,
-            "discord_webhook_instagram_news": None,
+            "discord_webhook_social": None,
         }
     )
     _seed_two_articles(settings)
 
     def _fail_if_called(self, item, classification, *, page_text=None):
-        pytest.fail("write_instagram_news ne doit jamais être appelé sans webhook configuré")
+        pytest.fail("write_social_visual ne doit jamais être appelé sans webhook configuré")
 
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "classify", _fake_classify_route_a_ou_b)
     monkeypatch.setattr(analyzer.GeminiAnalyzer, "write", _fake_write)
-    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_instagram_news", _fail_if_called)
+    monkeypatch.setattr(analyzer.GeminiAnalyzer, "write_social_visual", _fail_if_called)
     respx.post(settings.discord_webhook_route_a).mock(return_value=httpx.Response(204))
     respx.post(settings.discord_webhook_route_b).mock(return_value=httpx.Response(204))
 
     stats = run_cycle(settings, limit=10, dry_run=False)
 
-    assert stats.instagram_news_generated == 0
-    assert stats.instagram_news_sent == 0
+    assert stats.social_visual_content_generated == 0
 
 
 # --- T18 : scraping best-effort de la page article, avant classify(). ---

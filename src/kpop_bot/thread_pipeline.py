@@ -22,11 +22,10 @@ _EXTRA_IMAGE_COUNT = 5
 
 def _thread_api_keys(settings: Settings) -> list[str]:
     """Clé 2 en priorité pour les threads (demande explicite, pas le comportement par défaut de
-    la chaîne de secours) — même principe que `pipeline._instagram_news_api_keys` (T14/T18) :
-    liste de clés inversée plutôt que de modifier `_generate_with_fallback`, qui reste
-    inchangée et partagée avec le pipeline articles. Repli sur la clé 1 seulement si la clé 2
-    épuise toute sa chaîne de modèles (ou si elle est absente, auquel cas cette inversion est
-    un no-op)."""
+    la chaîne de secours) — liste de clés inversée plutôt que de modifier
+    `_generate_with_fallback`, qui reste inchangée et partagée avec le pipeline articles. Repli
+    sur la clé 1 seulement si la clé 2 épuise toute sa chaîne de modèles (ou si elle est
+    absente, auquel cas cette inversion est un no-op)."""
     keys = [settings.gemini_api_key]
     if settings.gemini_api_key_2:
         keys.append(settings.gemini_api_key_2)

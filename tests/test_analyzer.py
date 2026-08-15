@@ -576,11 +576,11 @@ def test_classify_injecte_le_contexte_de_page_si_fourni(gemini, monkeypatch, mak
     assert "Jane" in captured_prompts[0]
 
 
-# --- write_instagram_news (T18, remplace le script TikTok de T14) : prompt système dédié,
-# format "scroll-stopper narratif", séparé de celui du tweet. ---
+# --- write_social_visual (remplace write_instagram_news) : prompt système dédié, titre +
+# points clés pour le visuel 9:16, pour TOUTE route retenue (pas seulement A/CONCERT). ---
 
 
-def test_write_instagram_news_utilise_un_prompt_dedie_et_renvoie_le_schema(
+def test_write_social_visual_utilise_un_prompt_dedie_et_renvoie_le_schema(
     gemini, monkeypatch, make_article
 ):
     captured_prompts: list[str] = []
@@ -589,11 +589,11 @@ def test_write_instagram_news_utilise_un_prompt_dedie_et_renvoie_le_schema(
         captured_prompts.append(config.system_instruction)
         return _FakeResponse(
             {
-                "hook": "Un record vient de tomber !",
-                "paragraph_context": "Le groupe X vient de sortir un nouveau single.",
-                "paragraph_detail": "Le clip a franchi un nouveau palier de vues en 24h.",
-                "engagement_question": "Vous vous y attendiez ?",
-                "hashtags": ["#kpop", "#kpopnews"],
+                "headline_fr": "Un record vient de tomber pour le groupe X",
+                "key_points_fr": [
+                    "Le clip a franchi un nouveau palier de vues en 24h.",
+                    "Aucun autre groupe n'avait atteint ce chiffre aussi vite.",
+                ],
             }
         )
 
@@ -607,21 +607,20 @@ def test_write_instagram_news_utilise_un_prompt_dedie_et_renvoie_le_schema(
         virality_reason="Test.",
         artists=["Groupe X"],
     )
-    result, tokens_in, tokens_out = gemini.write_instagram_news(make_article(), classification)
+    result, tokens_in, tokens_out = gemini.write_social_visual(make_article(), classification)
 
-    assert result.hook == "Un record vient de tomber !"
-    assert result.paragraph_detail == "Le clip a franchi un nouveau palier de vues en 24h."
-    assert result.hashtags == ["#kpop", "#kpopnews"]
+    assert result.headline_fr == "Un record vient de tomber pour le groupe X"
+    assert len(result.key_points_fr) == 2
     assert tokens_in == 100
     assert tokens_out == 42
-    # Prompt bien distinct de celui du tweet — format scroll-stopper propre à ce salon.
-    assert "scroll" in captured_prompts[0].lower()
+    # Prompt bien distinct de celui du tweet — format card d'actu propre à ce visuel.
+    assert "card d'actu" in captured_prompts[0].lower()
     assert "Groupe X" in captured_prompts[0]
     assert "COMEBACK_SORTIE" in captured_prompts[0]
     assert "ELEVE" in captured_prompts[0]
 
 
-def test_write_instagram_news_gere_une_viralite_absente(gemini, monkeypatch, make_article):
+def test_write_social_visual_gere_une_viralite_absente(gemini, monkeypatch, make_article):
     """En pratique, une ClassificationResult valide a toujours une viralité non-nulle hors
     BRUIT_INUTILE (voir le validator dans models.py) — mais le formatage du prompt doit rester
     sûr si ce champ était un jour None, sans lever d'exception."""
@@ -631,11 +630,8 @@ def test_write_instagram_news_gere_une_viralite_absente(gemini, monkeypatch, mak
         captured_prompts.append(config.system_instruction)
         return _FakeResponse(
             {
-                "hook": "Accroche.",
-                "paragraph_context": "Contexte.",
-                "paragraph_detail": "Détail.",
-                "engagement_question": "Une question ?",
-                "hashtags": ["#kpop", "#comeback"],
+                "headline_fr": "Accroche.",
+                "key_points_fr": ["Point 1.", "Point 2."],
             }
         )
 
@@ -645,11 +641,11 @@ def test_write_instagram_news_gere_une_viralite_absente(gemini, monkeypatch, mak
     classification = ClassificationResult(
         category=Category.CONCERT_EVENEMENT_FRANCE, importance=Importance.MAJEUR, artists=[]
     ).model_copy(update={"virality": None})  # contourne le validator, cas normalement inatteignable
-    gemini.write_instagram_news(make_article(), classification)
+    gemini.write_social_visual(make_article(), classification)
     assert "N/A" in captured_prompts[0]
 
 
-def test_write_instagram_news_injecte_le_contexte_de_page_si_fourni(
+def test_write_social_visual_injecte_le_contexte_de_page_si_fourni(
     gemini, monkeypatch, make_article
 ):
     captured_prompts: list[str] = []
@@ -658,11 +654,8 @@ def test_write_instagram_news_injecte_le_contexte_de_page_si_fourni(
         captured_prompts.append(config.system_instruction)
         return _FakeResponse(
             {
-                "hook": "Accroche.",
-                "paragraph_context": "Contexte.",
-                "paragraph_detail": "Détail.",
-                "engagement_question": "Une question ?",
-                "hashtags": ["#kpop", "#comeback"],
+                "headline_fr": "Accroche.",
+                "key_points_fr": ["Point 1.", "Point 2."],
             }
         )
 
@@ -672,7 +665,7 @@ def test_write_instagram_news_injecte_le_contexte_de_page_si_fourni(
     classification = ClassificationResult(
         category=Category.COMEBACK_SORTIE, importance=Importance.MODERE, artists=[]
     )
-    gemini.write_instagram_news(
+    gemini.write_social_visual(
         make_article(),
         classification,
         page_text="Le membre Jane du groupe X a confirmé son retour en solo.",

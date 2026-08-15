@@ -16,22 +16,17 @@ from kpop_bot.models import (
     ThreadStatus,
     ThreadTheme,
     ThreadTopicRecord,
-    Virality,
 )
 from kpop_bot.notifier import (
     NotificationError,
     build_embed,
     build_info_header,
-    build_instagram_news_embed,
-    build_instagram_news_header,
-    build_instagram_news_message,
     build_review_message,
     build_thread_intro_message,
     build_thread_selection_embed,
     build_thread_tweet_header,
     build_tweet_header,
     notify,
-    notify_instagram_news,
     notify_review,
     notify_thread,
     notify_thread_selection,
@@ -202,65 +197,6 @@ def test_notify_review_envoie_un_seul_message(make_article):
     article = make_article(category=Category.BRUIT_INUTILE, importance=Importance.MINEUR)
     notify_review(article, url=url, timeout=5.0)
     assert route.call_count == 1
-
-
-# --- Salon dédié au post Instagram "actu/breaking news" (T18, remplace le script TikTok de
-# T14) : Route A et Route CONCERT, en plus de #actus-videos. ---
-
-
-def test_build_instagram_news_embed_contient_score_et_resume(make_article):
-    article = make_article(
-        route=Route.A,
-        virality=Virality.ELEVE,
-        video_summary="Résumé détaillé déjà généré pour la vidéo.",
-    )
-    embed = build_instagram_news_embed(article)
-    field_names = [f["name"] for f in embed["fields"]]
-    assert "Score de viralité" in field_names
-    assert "Résumé détaillé" in field_names
-
-
-def test_build_instagram_news_header_est_fixe():
-    assert build_instagram_news_header() == "# Post Instagram"
-
-
-def test_build_instagram_news_message_contient_tous_les_champs(make_article):
-    article = make_article(
-        instagram_hook="Un record vient de tomber !",
-        instagram_paragraph_context="Le groupe X a confirmé son retour.",
-        instagram_paragraph_detail="Le clip a franchi un nouveau palier de vues.",
-        instagram_engagement_question="Vous vous y attendiez ?",
-        instagram_hashtags=["#kpop", "#kpopnews"],
-    )
-    message = build_instagram_news_message(article)
-    assert "Un record vient de tomber !" in message
-    assert "Le groupe X a confirmé son retour." in message
-    assert "Le clip a franchi un nouveau palier de vues." in message
-    assert "Vous vous y attendiez ?" in message
-    assert "#kpop #kpopnews" in message
-
-
-@respx.mock
-def test_notify_instagram_news_envoie_quatre_messages_dans_l_ordre(make_article):
-    url = "https://discord.com/api/webhooks/fake/instagram"
-    mock = respx.post(url).mock(return_value=httpx.Response(204))
-    article = make_article(
-        route=Route.A,
-        virality=Virality.ELEVE,
-        instagram_hook="Accroche.",
-        instagram_paragraph_context="Contexte.",
-        instagram_paragraph_detail="Détail.",
-        instagram_engagement_question="Une question ?",
-        instagram_hashtags=["#kpop"],
-    )
-    notify_instagram_news(article, url=url, timeout=5.0, index=1)
-
-    assert mock.call_count == 4
-    bodies = [json.loads(call.request.content) for call in mock.calls]
-    assert bodies[0] == {"content": "# INFO 1"}
-    assert "embeds" in bodies[1]
-    assert bodies[2] == {"content": "# Post Instagram"}
-    assert "Accroche." in bodies[3]["content"]
 
 
 # --- Threads Twitter quotidiens (T15) : picker (webhook + réactions bot) et diffusion finale. ---

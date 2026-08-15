@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from enum import StrEnum
+from typing import Annotated
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -154,39 +155,32 @@ class WritingResult(BaseModel):
     )
 
 
-class InstagramNewsPost(BaseModel):
-    """Sortie du 3e appel IA (T18, remplace le script TikTok de T14) — prompt système dédié,
-    séparé du tweet pour éviter de diluer la qualité entre deux formats différents sur un
-    modèle lite. Déclenché pour la Route A et la Route CONCERT (mêmes articles qui reçoivent
-    déjà `video_summary`), et seulement si un salon dédié est configuré.
+class SocialVisualContent(BaseModel):
+    """Sortie du 3e appel IA (remplace le post Instagram de T18, lui-même un remplacement du
+    script TikTok de T14) — prompt système dédié, séparé du tweet/résumé pour éviter de diluer
+    la qualité entre formats différents sur un modèle lite. Déclenché pour TOUTE route retenue
+    (A, B, CONCERT — pas seulement Route A/CONCERT comme les fonctionnalités précédentes),
+    uniquement si le salon de prévisualisation du visuel social est configuré.
 
-    Format "scroll-stopper narratif" : un post Instagram texte façon actu/breaking news
-    (accroche forte, deux courts paragraphes qui développent, question d'engagement finale) —
-    ni un script vidéo à l'oral, ni des diapositives de carrousel."""
+    Texte pensé spécifiquement pour le visuel vertical 9:16 (titre + points clés, voir
+    templates/social_post.html) — le titre et les points clés sont rédigés ENSEMBLE par le
+    même appel pour garantir qu'ils se complètent sans jamais se répéter, contrairement à un
+    découpage mécanique de summary_fr en bullets."""
 
-    hook: str = Field(
-        description="Ligne d'accroche forte, 1-2 phrases — un fait qui arrête le scroll "
-        "(chiffre marquant, affirmation qui surprend, ou déclaration choc). Jamais de "
-        "méta-commentaire du type « info » ou « à lire »."
+    headline_fr: str = Field(
+        max_length=110,
+        description="Accroche courte et percutante, 10 à 15 mots maximum — le fait le plus "
+        "marquant de l'article, formulation choc plutôt qu'une phrase grammaticale complète, "
+        "jamais de point final. Casse normale (la mise en majuscules est appliquée au rendu, "
+        "pas ici).",
     )
-    paragraph_context: str = Field(
-        description="1er paragraphe (2-4 phrases) : le contexte — qui, quoi, dans quel cadre. "
-        "Ancré strictement dans les faits fournis, aucune invention."
-    )
-    paragraph_detail: str = Field(
-        description="2e paragraphe (2-4 phrases) : les détails qui font la valeur de l'info — "
-        "réactions, chiffres, enjeu, ce qui rend le sujet notable. Ancré strictement dans les "
-        "faits fournis, aucune invention."
-    )
-    engagement_question: str = Field(
-        description="Question courte de clôture, qui invite à réagir en commentaire — jamais "
-        "un appel générique à liker/partager."
-    )
-    hashtags: list[str] = Field(
+    key_points_fr: list[Annotated[str, Field(max_length=140)]] = Field(
         min_length=2,
         max_length=3,
-        description="2 à 3 hashtags pertinents pour la niche K-pop (ex. #KPop et le nom du "
-        "groupe), affichés en toute fin de légende — jamais mêlés au texte.",
+        description="2 à 3 points clés courts (une phrase chacune, ~15-20 mots), qui "
+        "COMPLÈTENT l'accroche sans jamais la répéter — chaque point doit apporter une "
+        "information distincte (contexte, réaction, conséquence, chiffre) que l'accroche ne "
+        "dit pas déjà.",
     )
 
 
@@ -437,11 +431,12 @@ class ArticleRecord(BaseModel):
     summary_fr: str | None = None
     video_summary: str | None = None
     tweet_draft: str | None = None
-    instagram_hook: str | None = None
-    instagram_paragraph_context: str | None = None
-    instagram_paragraph_detail: str | None = None
-    instagram_engagement_question: str | None = None
-    instagram_hashtags: list[str] = Field(default_factory=list)
+    headline_fr: str | None = None
+    key_points_fr: list[str] = Field(
+        default_factory=list,
+        description="Points clés courts pour le visuel social 9:16, rédigés avec headline_fr "
+        "par le même appel (SocialVisualContent) — voir social_pipeline.py.",
+    )
     artists: list[str] = Field(default_factory=list)
     image_url: str | None = None
     extra_image_urls: list[str] = Field(

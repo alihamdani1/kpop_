@@ -241,57 +241,6 @@ def notify_review(record: ArticleRecord, *, url: str, timeout: float) -> None:
     send_message(url, build_review_message(record), timeout=timeout)
 
 
-# --- Salon dédié au post Instagram "actu/breaking news" (T18, remplace le script TikTok de
-# T14) — Route A et Route CONCERT, en plus de #actus-videos. ---
-
-
-def build_instagram_news_embed(record: ArticleRecord) -> dict:
-    """Embed contextuel pour le salon Instagram : mêmes infos que l'embed Route A (titre,
-    score, résumé détaillé déjà généré) — propres à ce salon, comme pour le script TikTok
-    avant lui."""
-    color = _VIRALITY_COLORS[record.virality] if record.virality else 0x607D8B
-    return {
-        "title": record.title,
-        "url": record.url,
-        "color": color,
-        "footer": {"text": record.source},
-        "timestamp": record.published_at.isoformat(),
-        "fields": [
-            _score_field(record),
-            {"name": "Résumé détaillé", "value": record.video_summary or "(non généré)"},
-        ],
-    }
-
-
-def build_instagram_news_header() -> str:
-    """En-tête précédant le message-post. Voir la note de `build_info_header`."""
-    return "# Post Instagram"
-
-
-def build_instagram_news_message(record: ArticleRecord) -> str:
-    """Post complet (accroche + 2 paragraphes + question d'engagement + hashtags) en un seul
-    bloc copiable — pensé pour être repris tel quel en légende Instagram, même logique que le
-    tweet isolé dans son propre message."""
-    hashtags = " ".join(record.instagram_hashtags)
-    return (
-        f"{record.instagram_hook}\n\n"
-        f"{record.instagram_paragraph_context}\n\n"
-        f"{record.instagram_paragraph_detail}\n\n"
-        f"{record.instagram_engagement_question}\n\n"
-        f"{hashtags}"
-    )
-
-
-def notify_instagram_news(record: ArticleRecord, *, url: str, timeout: float, index: int) -> None:
-    """Envoie le post Instagram d'un article Route A/CONCERT vers le salon dédié — 4 messages,
-    même logique que `notify()` : en-tête numéroté, embed contextuel, en-tête post, puis le
-    texte complet en message brut."""
-    send_message(url, build_info_header(index), timeout=timeout)
-    send_embed(url, build_instagram_news_embed(record), timeout=timeout)
-    send_message(url, build_instagram_news_header(), timeout=timeout)
-    send_message(url, build_instagram_news_message(record), timeout=timeout)
-
-
 # --- Threads Twitter quotidiens (T15) — picker Discord (webhook + réactions bot) et diffusion
 # du thread final. Voir discord_reactions.py pour la lecture/pose des réactions (auth Bot
 # distincte du webhook utilisé ici). ---

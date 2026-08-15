@@ -1060,7 +1060,13 @@ au vert, `ruff` propre. **✔️ Rendu réel vérifié hors suite de tests** (Ch
 en page conformes). **Pas encore observé en conditions réelles bout en bout** (téléchargement d'une
 vraie image RSS + envoi Discord réel) — nécessite le webhook `DISCORD_WEBHOOK_SOCIAL` ci-dessus.
 
-### ✅ T18 — Scraping de page article + post Instagram "actu/breaking news" (remplace le script TikTok de T14) — FAIT
+### ✅ T18 — Scraping de page article + post Instagram "actu/breaking news" (remplace le script TikTok de T14) — FAIT, **section 3 retirée par T19**
+
+> **Mise à jour (T19)** : la partie 3 ci-dessous (post Instagram, `InstagramNewsPost`,
+> `write_instagram_news`, `discord_webhook_instagram_news`) a été **entièrement retirée** —
+> l'utilisateur ne l'utilisait plus. Remplacée par `SocialVisualContent`, voir T19. Les parties 1
+> (scraping de page) et 2 (fix du tweet vague) ci-dessous restent actives, inchangées. Les
+> colonnes `instagram_*` restent en base (inutilisées), même principe que `tiktok_*` avant elles.
 
 **Origine — deux demandes distinctes de l'utilisateur** :
 1. Remplacer le script TikTok (T14) par un texte de post Instagram format « actu/breaking
@@ -1155,6 +1161,83 @@ et un test d'intégration bout en bout vérifiant que le texte scrapé atteint b
 `write()` et que l'image/les images additionnelles sont enregistrées (`test_pipeline.py`).
 ✔️ 278 tests au vert, `ruff` propre — pas encore observé en conditions réelles (prochain cycle
 GitHub Actions, une fois le secret ajouté).
+
+---
+
+### ✅ T19 — Redesign du visuel social (zones de sécurité, hiérarchie visuelle) + `SocialVisualContent` (remplace le post Instagram T18) — FAIT
+
+**Origine** : après un premier envoi réel du visuel social (T17) sur le salon Discord privé,
+deux problèmes distincts remontés par l'utilisateur.
+
+**1. Cahier des charges de redesign du template** (`templates/social_post.html`) :
+- **Zones de sécurité** : les blocs de texte (badge/titre/date/puces) sont contraints à
+  `max-width: 840px` (~78 % des 1080px du canvas) sur un conteneur `.main-content` dédié —
+  jamais sur la partie droite, masquée par les boutons like/commentaire/partage de TikTok/Reels.
+  Marge basse généreuse (`padding-bottom: 170px` sur `.bottom-section`) pour ne pas chevaucher
+  la légende/le pseudo/l'icône son de l'application.
+- **Badge de catégorie** : conteneur contrasté (fond noir, texte blanc, `.category-badge`) très
+  visible, contre un simple texte gras auparavant.
+- **Titre principal** : grande taille (paliers `text-lg`/`text-md`/`text-sm` recalibrés pour un
+  titre court plutôt qu'un paragraphe, voir point 2), gras, MAJUSCULES (`text-transform`), 2-3
+  lignes maximum.
+- **Date** : jour/mois/année seuls (`_format_date_fr` modifié, l'heure retirée).
+  **Points clés** : liste à puces optionnelle (`{% if key_points %}`) sous le titre, taille
+  intermédiaire.
+- **CTA de fin** : texte fixe « Abonnez-vous à RUAN! pour plus d'actualités K-pop », centré.
+
+**2. Problème de fond, plus important que le redesign visuel** : le titre du visuel (jusque-là
+dérivé mécaniquement de `summary_fr`, tronqué à 14 mots en l'absence de `headline_fr`) pouvait
+couper une phrase en plein milieu, juste avant l'information la plus notable, et les "points
+clés" (simple découpage de `summary_fr` en phrases) redisaient souvent la même chose que le
+titre — aucune information nouvelle ne ressortait clairement.
+
+**Décision** : un **3e appel Gemini dédié**, `write_social_visual()` (`SocialVisualContent` —
+`headline_fr` + `key_points_fr`), qui rédige le titre ET les points clés **ensemble**, avec une
+consigne explicite de complémentarité (« les points clés complètent le titre, ne le répètent
+jamais »). Remplace entièrement le post Instagram de T18 :
+
+| Sujet | T18 (retiré) | T19 |
+|---|---|---|
+| Déclenché pour | Route A + CONCERT uniquement | **Toute route retenue** (A, B, CONCERT) |
+| Salon | `discord_webhook_instagram_news` | `discord_webhook_social` (même salon que le visuel) |
+| Clé API | 2e clé en priorité (instance séparée) | Même instance que `classify()`/`write()` — le volume couvre désormais la majorité du trafic quotidien, une priorité de clé dédiée a moins de sens |
+| Sortie | `hook`/`paragraph_context`/`paragraph_detail`/`engagement_question`/`hashtags` | `headline_fr` (≤110 car., 10-15 mots) + `key_points_fr` (2-3 items, ≤140 car. chacun) |
+
+**Décision explicite de l'utilisateur** : retirer complètement le post Instagram (webhook,
+prompt, schéma, colonnes de lecture) plutôt que de le laisser coexister — il ne l'utilisait plus.
+Contrepartie assumée : le nouveau 3e appel tourne pour **toutes** les routes retenues (pas
+seulement A/CONCERT), donc plus souvent que l'ex-post Instagram — décision consciente de
+l'utilisateur, qui échangeait explicitement l'un contre l'autre.
+
+**Repli si le 3e appel échoue ou pour un article historique** (colonnes `NULL`/`'[]'`) :
+`social_pipeline._fallback_headline`/`_fallback_key_points`, dérivés de `summary_fr` — la même
+mécanique qu'avant T19, désormais un filet de sécurité plutôt que le chemin principal.
+`_fallback_headline` tronque toujours à 14 mots (comportement inchangé, le bug de coupure en
+plein milieu de phrase reste possible sur ce chemin de repli uniquement, jamais sur le chemin
+principal).
+
+**Fichiers concernés** : `models.py` (`SocialVisualContent` remplace `InstagramNewsPost`,
+`headline_fr` retiré de `WritingResult`), `analyzer.py` (`_SOCIAL_VISUAL_SYSTEM_PROMPT`,
+`write_social_visual()`, `PROMPT_VERSION` → `v5`), `storage.py` (colonnes `instagram_*` retirées
+du schéma des bases neuves — restent orphelines sur les bases existantes, même principe que
+`tiktok_*` ; nouvelle colonne `key_points_fr`), `pipeline.py` (3e appel pour toute route retenue,
+gated sur `discord_webhook_social`, plus de priorité de clé dédiée), `notifier.py`
+(`notify_instagram_news`/helpers retirés), `settings.py`/`.env.example`/`pipeline.yml`
+(`discord_webhook_instagram_news` retiré, `discord_webhook_social` désormais lu par le cycle
+principal), `social_pipeline.py` (`_key_points`/`_headline_text` préfèrent les champs dédiés,
+repli inchangé en dernier recours), `templates/social_post.html` (redesign complet).
+
+**Fait quand** : tests sur `SocialVisualContent` (bornes 2-3 points clés, ≤110/≤140 caractères,
+`test_models.py`), sur le nouveau prompt et son injection catégorie/importance/viralité/contexte
+de page (`test_analyzer.py`), sur `save_analysis`/migration/`_row_to_record`
+(`test_storage.py`), sur la génération pour toute route retenue + échec non bloquant + no-op
+sans webhook (`test_pipeline.py`), sur `_key_points`/`_headline_text` préférant les champs dédiés
+avec repli (`test_social_pipeline.py`), sur le rendu du nouveau template (badge, points clés
+optionnels, `test_visual_generator.py`) — 285 tests au vert, `ruff` propre. **✔️ Vérifié en
+conditions réelles** : vrai appel `write_social_visual()` sur un article réel (scandale familial
+Ha Young) — titre complet et percutant, 2 points clés authentiquement distincts (réaction
+publique, puis le fait précis sur le grand-père) ; rendu réel du visuel avec la vraie photo RSS,
+envoyé et vérifié visuellement.
 
 ---
 

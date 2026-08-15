@@ -1,7 +1,16 @@
-"""Orchestration du visuel social 9:16 (RSS image + tweet -> PNG -> Discord). Séparé de
+"""Orchestration du visuel social 9:16 (RSS image + titre -> PNG -> Discord). Séparé de
 `pipeline.py`, même principe que `thread_pipeline.py` : cadence et dépendances (Chromium via
 Playwright) totalement différentes du cycle articles existant, aucun risque de régression sur
-`run_cycle` déjà en production."""
+`run_cycle` déjà en production. Aucun appel Gemini ici — ce module ne fait que lire des champs
+déjà calculés par `run_cycle` (`headline_fr`/`key_points_fr`, rédigés ensemble par le 3e appel
+`SocialVisualContent`, voir analyzer.py/pipeline.py) et rendre/envoyer le visuel.
+
+Texte affiché : `headline_fr` en titre, `key_points_fr` en points clés — rédigés ENSEMBLE par un
+appel dédié pour garantir qu'ils se complètent sans se répéter, pour TOUTE route retenue (A, B,
+CONCERT). Si cet appel a échoué ou que l'article a été traité avant son introduction (colonnes
+NULL/'[]' en base), repli automatique dérivé de `summary_fr` — moins percutant mais jamais vide.
+Ni l'un ni l'autre n'est `tweet_draft` (tag, hashtags, question d'engagement — pensé pour
+Twitter, pas pour une card d'actu façon HugoDécrypte)."""
 
 from __future__ import annotations
 
@@ -12,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from kpop_bot import media_library, notifier, storage, visual_generator
-from kpop_bot.models import TWEET_TAG_LABELS, ArticleRecord, TweetTag, determine_tweet_tag
+from kpop_bot.models import ArticleRecord, TweetTag, determine_tweet_tag
 from kpop_bot.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -34,24 +43,63 @@ _MOIS_FR = [
 
 
 def _format_date_fr(moment: dt.datetime) -> str:
-    """Formatage manuel plutôt que `strftime('%B')` — évite une dépendance à la locale du
-    système, non garantie fr_FR sur un runner GitHub Actions."""
-    return f"{moment.day} {_MOIS_FR[moment.month - 1]} {moment.year} · {moment.strftime('%Hh%M')}"
+    """Jour/mois/année uniquement (pas d'heure — cahier des charges du redesign du visuel) —
+    formatage manuel plutôt que `strftime('%B')` : évite une dépendance à la locale du système,
+    non garantie fr_FR sur un runner GitHub Actions."""
+    return f"{moment.day} {_MOIS_FR[moment.month - 1]} {moment.year}"
 
 
-def _category_label_and_body(article: ArticleRecord) -> tuple[str, str]:
-    """Le tag (`[GOSSIP]`/`[RELEASE]`/...) est déjà préfixé au `tweet_draft` stocké par
-    pipeline.py (T5quater, dérivé de category/importance/virality, jamais par l'IA) — recalculé
-    ici via la même fonction pure pour l'afficher comme étiquette de catégorie séparée dans le
-    visuel, et retiré du corps du texte pour ne pas apparaître deux fois."""
+_FALLBACK_HEADLINE_MAX_WORDS = 14
+
+
+def _fallback_headline(summary_fr: str) -> str:
+    """Repli pour les articles sans `headline_fr` (générés avant son introduction — colonne
+    migrée, NULL sur l'historique, voir storage._MIGRATED_COLUMNS). Tronque `summary_fr` aux
+    ~14 premiers mots plutôt que d'afficher le résumé complet en pavé — moins percutant qu'une
+    vraie accroche rédigée, mais jamais vide."""
+    words = summary_fr.split()
+    return " ".join(words[:_FALLBACK_HEADLINE_MAX_WORDS]).rstrip(".,;: ")
+
+
+def _headline_text(article: ArticleRecord) -> str:
+    if article.headline_fr:
+        return article.headline_fr
+    return _fallback_headline(article.summary_fr or "")
+
+
+def _fallback_key_points(summary_fr: str) -> list[str]:
+    """Repli si `key_points_fr` est vide (appel `SocialVisualContent` pas encore introduit pour
+    cet article, ou échoué — voir `run_social_visuals`) — découpage mécanique de `summary_fr`
+    (déjà 2 phrases, ton neutre) sur les limites de phrase. Moins pertinent que de vrais points
+    clés rédigés pour compléter le titre (peut se répéter avec `_headline_text` en repli lui
+    aussi), mais jamais vide."""
+    summary = summary_fr.strip()
+    if not summary:
+        return []
+    sentences = [sentence.strip() for sentence in summary.split(". ")]
+    return [
+        sentence if sentence.endswith((".", "!", "?")) else f"{sentence}."
+        for sentence in sentences
+        if sentence
+    ][:3]
+
+
+def _key_points(article: ArticleRecord) -> list[str]:
+    if article.key_points_fr:
+        return article.key_points_fr
+    return _fallback_key_points(article.summary_fr or "")
+
+
+def _category_label(article: ArticleRecord) -> str:
+    """Étiquette affichée séparément sur le visuel (`GOSSIP`/`RELEASE`/...) — dérivée par la même
+    fonction pure que le tag préfixé au tweet Twitter (T5quater), pour rester cohérente avec la
+    catégorie déjà affichée ailleurs, sans appel IA supplémentaire."""
     if article.category is not None and article.importance is not None:
         tag = determine_tweet_tag(article.category, article.importance, article.virality)
     else:  # ne devrait jamais arriver pour un article SENT (category/importance toujours
         # fixés par save_analysis) — filet défensif plutôt qu'une exception ici.
         tag = TweetTag.INFO
-    label = TWEET_TAG_LABELS[tag]
-    body = (article.tweet_draft or "").removeprefix(f"{label}\n\n")
-    return tag.value, body
+    return tag.value
 
 
 def _resolve_image_bytes(article: ArticleRecord, settings: Settings) -> bytes | None:
@@ -127,12 +175,12 @@ def run_social_visuals(settings: Settings, *, dry_run: bool = False) -> SocialVi
                     stats.skipped_no_image += 1
                     continue
 
-                category_label, tweet_body = _category_label_and_body(article)
                 try:
                     png_bytes = renderer.render(
                         image_bytes=image_bytes,
-                        tweet_text=tweet_body,
-                        category_label=category_label,
+                        headline=_headline_text(article),
+                        key_points=_key_points(article),
+                        category_label=_category_label(article),
                         formatted_date=_format_date_fr(article.published_at),
                     )
                 except Exception as exc:  # bonus non bloquant — jamais fatal pour le run

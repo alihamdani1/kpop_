@@ -1,4 +1,4 @@
-"""Génération du visuel social 9:16 (image d'article + tweet -> PNG), pour diffusion via
+"""Génération du visuel social 9:16 (image d'article + résumé -> PNG), pour diffusion via
 `social_pipeline.py` sur un salon Discord privé de prévisualisation (relecture avant publication
 manuelle sur TikTok/Instagram — même principe human-in-the-loop que le reste du projet).
 
@@ -21,12 +21,14 @@ _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _VIEWPORT_WIDTH = 1080
 _VIEWPORT_HEIGHT = 1920  # 9:16 — format vertical standard TikTok/Reels/Stories.
 
-# Paliers de taille de police par longueur de texte, calculés en Python plutôt qu'en CSS pur
-# (clamp() seul ne suffirait pas à garantir qu'un tweet proche de la limite de 260 caractères ne
-# déborde jamais du bloc texte).
+# Paliers de taille du titre par longueur de texte, calculés en Python plutôt qu'en CSS pur
+# (clamp() seul ne suffirait pas à garantir un titre qui tient toujours en 2-3 lignes, cahier
+# des charges du redesign). Bornes choisies pour une accroche de 10-15 mots (~110 caractères
+# max, voir models.WritingResult.headline_fr) dans la colonne de texte à largeur contrainte
+# (78 % du canvas, zone de sécurité TikTok/Reels — voir templates/social_post.html).
 _FONT_SIZE_TIERS: list[tuple[int, str]] = [
-    (100, "text-lg"),
-    (180, "text-md"),
+    (40, "text-lg"),
+    (70, "text-md"),
 ]
 _FONT_SIZE_DEFAULT = "text-sm"
 
@@ -50,19 +52,21 @@ def build_html(
     template_path: Path,
     *,
     image_bytes: bytes,
-    tweet_text: str,
+    headline: str,
+    key_points: list[str],
     category_label: str,
     formatted_date: str,
 ) -> str:
     """Rendu Jinja2 pur (aucun navigateur) — testable indépendamment de Playwright. Le contenu
-    (catégorie, date) est décidé côté social_pipeline.py — ce module ignore tout de la sémantique
-    d'un article, il ne fait que gabarier des chaînes déjà prêtes."""
+    (titre, points clés, catégorie, date) est décidé côté social_pipeline.py — ce module ignore
+    tout de la sémantique d'un article, il ne fait que gabarier des chaînes déjà prêtes."""
     env = jinja2.Environment(autoescape=True)
     template = env.from_string(template_path.read_text(encoding="utf-8"))
     return template.render(
         image_data_uri=_image_data_uri(image_bytes),
-        tweet_text=tweet_text,
-        font_size_class=_font_size_class(tweet_text),
+        headline=headline,
+        headline_size_class=_font_size_class(headline),
+        key_points=key_points,
         category_label=category_label,
         formatted_date=formatted_date,
     )
@@ -76,7 +80,8 @@ class SocialVisualRenderer:
         with SocialVisualRenderer(template_path) as renderer:
             for article in articles:
                 png_bytes = renderer.render(
-                    image_bytes=..., tweet_text=..., category_label=..., formatted_date=...
+                    image_bytes=..., headline=..., key_points=..., category_label=...,
+                    formatted_date=...,
                 )
     """
 
@@ -97,13 +102,20 @@ class SocialVisualRenderer:
             self._playwright.stop()
 
     def render(
-        self, *, image_bytes: bytes, tweet_text: str, category_label: str, formatted_date: str
+        self,
+        *,
+        image_bytes: bytes,
+        headline: str,
+        key_points: list[str],
+        category_label: str,
+        formatted_date: str,
     ) -> bytes:
         assert self._browser is not None, "SocialVisualRenderer doit être utilisé via `with`."
         html = build_html(
             self._template_path,
             image_bytes=image_bytes,
-            tweet_text=tweet_text,
+            headline=headline,
+            key_points=key_points,
             category_label=category_label,
             formatted_date=formatted_date,
         )

@@ -37,7 +37,9 @@ jobs:
           DISCORD_WEBHOOK_ROUTE_B: ${{ secrets.DISCORD_WEBHOOK_ROUTE_B }}
           DISCORD_WEBHOOK_CONCERT: ${{ secrets.DISCORD_WEBHOOK_CONCERT }}
           DISCORD_WEBHOOK_INFO_A_VERIFIER: ${{ secrets.DISCORD_WEBHOOK_INFO_A_VERIFIER }}
-          DISCORD_WEBHOOK_INSTAGRAM_NEWS: ${{ secrets.DISCORD_WEBHOOK_INSTAGRAM_NEWS }}
+          # Décide si le 3e appel Gemini (SocialVisualContent, voir pipeline.py) est fait —
+          # le visuel lui-même est généré/envoyé séparément par social_visuals.yml.
+          DISCORD_WEBHOOK_SOCIAL: ${{ secrets.DISCORD_WEBHOOK_SOCIAL }}
         run: python -m kpop_bot run
 
       - name: Résoudre le picker de threads Twitter (T15)

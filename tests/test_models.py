@@ -8,8 +8,8 @@ from kpop_bot.models import (
     Category,
     ClassificationResult,
     Importance,
-    InstagramNewsPost,
     Route,
+    SocialVisualContent,
     TweetTag,
     Virality,
     WritingResult,
@@ -149,34 +149,48 @@ def test_tous_les_tags_ont_un_libelle():
         assert TWEET_TAG_LABELS[tag].strip()  # non vide
 
 
-# --- InstagramNewsPost (T18, remplace TikTokScriptResult de T14) ---
+# --- SocialVisualContent (remplace InstagramNewsPost) : titre + points clés du visuel 9:16,
+# rédigés ensemble par un 3e appel dédié pour toute route retenue. ---
 
-_VALID_INSTAGRAM_POST = dict(
-    hook="Un comeback annoncé sans prévenir.",
-    paragraph_context="Le groupe vient de confirmer son retour.",
-    paragraph_detail="Les premières réactions sont déjà nombreuses.",
-    engagement_question="Vous en pensez quoi ?",
-    hashtags=["#KPop", "#Comeback"],
+_VALID_SOCIAL_VISUAL = dict(
+    headline_fr="Le groupe confirme un comeback surprise",
+    key_points_fr=["Un extrait a été dévoilé ce matin.", "Aucune fuite avant l'annonce."],
 )
 
 
-def test_instagram_news_post_avec_2_hashtags_est_accepte():
-    post = InstagramNewsPost(**{**_VALID_INSTAGRAM_POST, "hashtags": ["#KPop", "#Comeback"]})
-    assert post.hashtags == ["#KPop", "#Comeback"]
+def test_social_visual_content_avec_2_points_cles_est_accepte():
+    content = SocialVisualContent(**_VALID_SOCIAL_VISUAL)
+    assert len(content.key_points_fr) == 2
 
 
-def test_instagram_news_post_avec_3_hashtags_est_accepte():
-    post = InstagramNewsPost(
-        **{**_VALID_INSTAGRAM_POST, "hashtags": ["#KPop", "#Comeback", "#GroupeX"]}
+def test_social_visual_content_avec_3_points_cles_est_accepte():
+    content = SocialVisualContent(
+        **{**_VALID_SOCIAL_VISUAL, "key_points_fr": ["Point 1.", "Point 2.", "Point 3."]}
     )
-    assert len(post.hashtags) == 3
+    assert len(content.key_points_fr) == 3
 
 
-def test_instagram_news_post_avec_1_seul_hashtag_est_rejete():
+def test_social_visual_content_avec_1_seul_point_cle_est_rejete():
     with pytest.raises(ValidationError):
-        InstagramNewsPost(**{**_VALID_INSTAGRAM_POST, "hashtags": ["#KPop"]})
+        SocialVisualContent(**{**_VALID_SOCIAL_VISUAL, "key_points_fr": ["Un seul point."]})
 
 
-def test_instagram_news_post_avec_4_hashtags_est_rejete():
+def test_social_visual_content_avec_4_points_cles_est_rejete():
     with pytest.raises(ValidationError):
-        InstagramNewsPost(**{**_VALID_INSTAGRAM_POST, "hashtags": ["#A", "#B", "#C", "#D"]})
+        SocialVisualContent(
+            **{**_VALID_SOCIAL_VISUAL, "key_points_fr": ["P1.", "P2.", "P3.", "P4."]}
+        )
+
+
+def test_social_visual_content_headline_trop_longue_est_rejetee():
+    with pytest.raises(ValidationError):
+        SocialVisualContent(**{**_VALID_SOCIAL_VISUAL, "headline_fr": "x" * 111})
+
+
+def test_social_visual_content_headline_exactement_110_est_acceptee():
+    SocialVisualContent(**{**_VALID_SOCIAL_VISUAL, "headline_fr": "x" * 110})
+
+
+def test_social_visual_content_point_cle_trop_long_est_rejete():
+    with pytest.raises(ValidationError):
+        SocialVisualContent(**{**_VALID_SOCIAL_VISUAL, "key_points_fr": ["x" * 141, "Point 2."]})

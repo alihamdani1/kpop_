@@ -13,8 +13,8 @@ from kpop_bot.models import (
     ClassificationResult,
     FetchedItem,
     Importance,
-    InstagramNewsPost,
     Route,
+    SocialVisualContent,
     Virality,
     WritingResult,
 )
@@ -107,7 +107,7 @@ def test_save_analysis_route_a_devient_analyzed_avec_ecriture(conn):
     assert record.artists == ["Groupe X"]
 
 
-def test_save_analysis_avec_post_instagram(conn):
+def test_save_analysis_avec_contenu_visuel_social(conn):
     article_id = storage.insert_new_article(conn, _item())
     classification = ClassificationResult(
         category=Category.CONCERT_EVENEMENT_FRANCE,
@@ -117,12 +117,9 @@ def test_save_analysis_avec_post_instagram(conn):
         artists=["Groupe X"],
     )
     writing = WritingResult(summary_fr="Résumé.", tweet_draft="Tweet.")
-    instagram_news = InstagramNewsPost(
-        hook="Accroche.",
-        paragraph_context="Contexte.",
-        paragraph_detail="Détail.",
-        engagement_question="Une question ?",
-        hashtags=["#kpop", "#comeback"],
+    social_visual = SocialVisualContent(
+        headline_fr="Accroche.",
+        key_points_fr=["Point un.", "Point deux."],
     )
     storage.save_analysis(
         conn,
@@ -134,17 +131,14 @@ def test_save_analysis_avec_post_instagram(conn):
         120,
         60,
         "v1",
-        instagram_news=instagram_news,
+        social_visual=social_visual,
     )
     [record] = storage.pending(conn, ArticleStatus.ANALYZED)
-    assert record.instagram_hook == "Accroche."
-    assert record.instagram_paragraph_context == "Contexte."
-    assert record.instagram_paragraph_detail == "Détail."
-    assert record.instagram_engagement_question == "Une question ?"
-    assert record.instagram_hashtags == ["#kpop", "#comeback"]
+    assert record.headline_fr == "Accroche."
+    assert record.key_points_fr == ["Point un.", "Point deux."]
 
 
-def test_save_analysis_sans_post_instagram_laisse_les_champs_vides(conn):
+def test_save_analysis_sans_contenu_visuel_social_laisse_les_champs_vides(conn):
     article_id = storage.insert_new_article(conn, _item())
     classification = ClassificationResult(
         category=Category.COMEBACK_SORTIE, importance=Importance.MODERE, artists=[]
@@ -152,10 +146,8 @@ def test_save_analysis_sans_post_instagram_laisse_les_champs_vides(conn):
     writing = WritingResult(summary_fr="Résumé.", tweet_draft="Tweet.")
     storage.save_analysis(conn, article_id, classification, Route.B, False, writing, 10, 5, "v1")
     [record] = storage.pending(conn, ArticleStatus.ANALYZED)
-    assert record.instagram_hook is None
-    assert record.instagram_paragraph_context is None
-    assert record.instagram_paragraph_detail is None
-    assert record.instagram_hashtags == []
+    assert record.headline_fr is None
+    assert record.key_points_fr == []
 
 
 def test_save_analysis_avec_image_scrapee_met_a_jour_image_url(conn):
@@ -198,9 +190,9 @@ def test_save_analysis_sans_image_scrapee_conserve_l_image_existante(conn):
 
 
 def test_migrate_schema_ajoute_les_colonnes_manquantes(tmp_path: Path):
-    """Simule une base créée avant T14 (sans les colonnes instagram_*/extra_image_urls) — la
-    migration doit les ajouter sans erreur, sur une vraie base déjà peuplée (comme
-    data/kpop.db en production)."""
+    """Simule une base créée avant T14 (sans les colonnes headline_fr/key_points_fr/
+    extra_image_urls) — la migration doit les ajouter sans erreur, sur une vraie base déjà
+    peuplée (comme data/kpop.db en production)."""
     path = tmp_path / "legacy.db"
     legacy_conn = sqlite3.connect(path)
     legacy_conn.execute(
@@ -228,17 +220,10 @@ def test_migrate_schema_ajoute_les_colonnes_manquantes(tmp_path: Path):
 
     conn = storage.init_db(path)  # doit migrer sans écraser la ligne déjà présente
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(articles)").fetchall()}
-    assert {
-        "instagram_hook",
-        "instagram_paragraph_context",
-        "instagram_paragraph_detail",
-        "instagram_engagement_question",
-        "instagram_hashtags",
-        "extra_image_urls",
-    } <= columns
+    assert {"extra_image_urls", "headline_fr", "key_points_fr"} <= columns
     row = conn.execute("SELECT * FROM articles WHERE fingerprint = 'fp-legacy'").fetchone()
     assert row["title"] == "Titre"
-    assert row["instagram_hook"] is None
+    assert row["headline_fr"] is None
     conn.close()
 
 
