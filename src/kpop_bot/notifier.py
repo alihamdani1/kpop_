@@ -325,23 +325,41 @@ def build_thread_extra_images_message(count: int) -> str:
     return f"# {count} autre(s) photo(s) au choix, si une image d'un tweet ne convient pas"
 
 
-# --- Visuel social 9:16 (RSS image + tweet -> PNG, voir visual_generator.py/social_pipeline.py)
-# — salon Discord privé de prévisualisation avant publication manuelle sur TikTok/Instagram. ---
+# --- Visuels sociaux (RSS image + titre/points clés -> PNG, voir
+# visual_generator.py/social_pipeline.py) — salon Discord privé de prévisualisation avant
+# publication manuelle. Deux formats par article, même salon : TikTok/Reels (9:16) et
+# publication Instagram (4:5). ---
 
 
 def build_social_visual_header(index: int) -> str:
-    """En-tête précédant le visuel. Voir la note de `build_info_header` (T6)."""
+    """En-tête précédant les deux visuels. Voir la note de `build_info_header` (T6)."""
     return f"# Post {index}"
 
 
+def build_instagram_visual_label() -> str:
+    """Légende du 2e message (image Instagram) — le texte du tweet est déjà donné une fois sur
+    le 1er visuel, inutile de le répéter à l'identique une deuxième fois."""
+    return "Format publication Instagram (4:5)"
+
+
 def notify_social_visual(
-    record: ArticleRecord, image_path: Path, *, url: str, timeout: float, index: int
+    record: ArticleRecord,
+    tiktok_image_path: Path,
+    instagram_image_path: Path,
+    *,
+    url: str,
+    timeout: float,
+    index: int,
 ) -> None:
-    """Envoie le visuel généré (en-tête + tweet en contenu + visuel en pièce jointe) vers le
-    salon de prévisualisation. Réutilise `send_message_with_image` telle quelle (T16) — le texte
-    du tweet reste le contenu du message, la pièce jointe n'affecte pas sa copie (T16bis)."""
+    """Envoie les deux visuels générés pour un même article vers le salon de prévisualisation —
+    en-tête, puis le tweet + le visuel TikTok/Reels, puis le visuel Instagram avec une légende
+    courte. Réutilise `send_message_with_image` telle quelle (T16) — le texte du tweet reste le
+    contenu du 1er message, la pièce jointe n'affecte pas sa copie (T16bis)."""
     send_message(url, build_social_visual_header(index), timeout=timeout)
-    send_message_with_image(url, record.tweet_draft, image_path, timeout=timeout)
+    send_message_with_image(url, record.tweet_draft, tiktok_image_path, timeout=timeout)
+    send_message_with_image(
+        url, build_instagram_visual_label(), instagram_image_path, timeout=timeout
+    )
 
 
 def notify_thread(

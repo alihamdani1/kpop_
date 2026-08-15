@@ -38,6 +38,9 @@ def settings(tmp_path: Path) -> Settings:
         social_visual_template_path=Path(__file__).resolve().parent.parent
         / "templates"
         / "social_post.html",
+        social_visual_instagram_template_path=Path(__file__).resolve().parent.parent
+        / "templates"
+        / "social_post_instagram.html",
     )
 
 
@@ -93,13 +96,14 @@ def _seed_sent_article(
 
 
 class _FakeRenderer:
-    """Remplace SocialVisualRenderer (Playwright réel) — pas de navigateur dans les tests."""
+    """Remplace SocialVisualRenderer (Playwright réel) — pas de navigateur dans les tests.
+    `render()` est appelé deux fois par article (gabarit TikTok puis Instagram, voir
+    social_pipeline._TIKTOK_DIMENSIONS/_INSTAGRAM_DIMENSIONS) — `calls` garde trace des deux."""
 
     instances: list[_FakeRenderer] = []
 
-    def __init__(self, template_path: Path) -> None:
-        self.template_path = template_path
-        self.calls: list[tuple[bytes, str, list[str], str, str]] = []
+    def __init__(self) -> None:
+        self.calls: list[tuple[Path, int, int, bytes, str, list[str], str, str]] = []
         self.raise_on_render = False
         _FakeRenderer.instances.append(self)
 
@@ -112,6 +116,9 @@ class _FakeRenderer:
     def render(
         self,
         *,
+        template_path: Path,
+        width: int,
+        height: int,
         image_bytes: bytes,
         headline: str,
         key_points: list[str],
@@ -120,7 +127,18 @@ class _FakeRenderer:
     ) -> bytes:
         if self.raise_on_render:
             raise RuntimeError("échec de rendu simulé")
-        self.calls.append((image_bytes, headline, key_points, category_label, formatted_date))
+        self.calls.append(
+            (
+                template_path,
+                width,
+                height,
+                image_bytes,
+                headline,
+                key_points,
+                category_label,
+                formatted_date,
+            )
+        )
         return b"fake-png-bytes"
 
 
@@ -158,9 +176,21 @@ def test_run_social_visuals_envoie_avec_image_rss(settings, monkeypatch):
     assert stats.sent == 1
     assert stats.skipped_no_image == 0
     [renderer] = _FakeRenderer.instances
-    assert renderer.calls == [
-        (b"rss-bytes", "Un titre de test", ["Point 1.", "Point 2."], "RELEASE", "24 juillet 2026")
+    assert [call[:3] for call in renderer.calls] == [
+        (settings.social_visual_template_path, 1080, 1920),
+        (settings.social_visual_instagram_template_path, 1080, 1350),
     ]
+    assert all(
+        call[3:]
+        == (
+            b"rss-bytes",
+            "Un titre de test",
+            ["Point 1.", "Point 2."],
+            "RELEASE",
+            "24 juillet 2026",
+        )
+        for call in renderer.calls
+    )
 
     conn = storage.init_db(settings.db_path)
     assert storage.pending_social_visuals(conn, limit=10) == []
@@ -186,15 +216,18 @@ def test_run_social_visuals_repli_media_library_si_pas_image_rss(settings, monke
 
     assert stats.sent == 1
     [renderer] = _FakeRenderer.instances
-    assert renderer.calls == [
-        (
+    assert len(renderer.calls) == 2  # gabarit TikTok puis gabarit Instagram
+    assert all(
+        call[3:]
+        == (
             b"media-library-bytes",
             "Un titre de test",
             ["Point 1.", "Point 2."],
             "RELEASE",
             "24 juillet 2026",
         )
-    ]
+        for call in renderer.calls
+    )
 
 
 def test_run_social_visuals_skip_si_aucune_image_disponible(settings, monkeypatch):
@@ -221,8 +254,8 @@ def test_run_social_visuals_echec_de_rendu_non_bloquant(settings, monkeypatch):
     settings = settings.model_copy(update={"discord_webhook_social": _WEBHOOK})
     _seed_sent_article(settings, image_url="https://example.com/photo.jpg")
 
-    def _fake_renderer_factory(template_path: Path) -> _FakeRenderer:
-        instance = _FakeRenderer(template_path)
+    def _fake_renderer_factory() -> _FakeRenderer:
+        instance = _FakeRenderer()
         instance.raise_on_render = True
         return instance
 

@@ -20,7 +20,8 @@
     .top-section {
       position: relative;
       width: 100%;
-      height: 980px; /* ~50% de la hauteur */
+      height: 900px; /* légèrement réduit (ex-980px) pour redonner de la place au bas — voir
+                        le padding-bottom de .bottom-section, zone de sécurité légende/pseudo. */
       background-color: #1a1a1a;
       overflow: hidden;
     }
@@ -80,8 +81,12 @@
       flex: 1; /* Prend tout le reste de la hauteur */
       background-color: #FFD43F; /* Le jaune vif signature */
       color: #000000;
-      /* Bas très généreux : zone de sécurité TikTok/Reels (légende, pseudo, icônes de son). */
-      padding: 56px 64px 170px 64px;
+      /* Bas très généreux : zone de sécurité TikTok/Reels (légende, pseudo, icônes de son) —
+         240px, la place gagnée sur .top-section ci-dessus (+80px) plus 10px repris sur le
+         padding haut. Budget vertical revérifié avec les espacements resserrés ci-dessous
+         (badge/date/points clés) pour rester dans les clous même au pire cas (titre 3 lignes +
+         3 points clés longs). */
+      padding: 48px 64px 240px 64px;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
@@ -117,7 +122,7 @@
       letter-spacing: 1px;
       text-transform: uppercase;
       padding: 12px 28px;
-      margin-bottom: 36px;
+      margin-bottom: 28px;
     }
 
     /* Titre principal — accroche courte (10-15 mots), grande taille, tout en majuscules. */
@@ -140,7 +145,7 @@
 
     /* Date — jour/mois/année seuls (pas d'heure), style sobre et discret. */
     .timestamp {
-      margin-top: 28px;
+      margin-top: 24px;
       font-size: 30px;
       font-weight: 600;
       color: rgba(0, 0, 0, 0.65);
@@ -150,14 +155,14 @@
        titre et la date. */
     .key-points {
       list-style: none;
-      margin-top: 32px;
+      margin-top: 28px;
     }
 
     .key-points li {
       font-size: 34px;
       font-weight: 700;
       line-height: 1.3;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
       padding-left: 36px;
       position: relative;
     }

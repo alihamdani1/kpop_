@@ -1,11 +1,14 @@
-"""Génération du visuel social 9:16 (image d'article + résumé -> PNG), pour diffusion via
+"""Génération des visuels sociaux (image d'article + résumé -> PNG) pour diffusion via
 `social_pipeline.py` sur un salon Discord privé de prévisualisation (relecture avant publication
-manuelle sur TikTok/Instagram — même principe human-in-the-loop que le reste du projet).
+manuelle sur TikTok/Instagram — même principe human-in-the-loop que le reste du projet). Deux
+gabarits, même moteur de rendu : `templates/social_post.html` (9:16, TikTok/Reels/Stories) et
+`templates/social_post_instagram.html` (4:5, publication de feed) — voir social_pipeline.py pour
+les dimensions de chacun.
 
-Rendu HTML/CSS (`templates/social_post.html`, Jinja2) via Chromium headless (Playwright) — choisi
-plutôt qu'une composition raster (Pillow) pour obtenir gratuitement, via CSS (`object-fit: cover`,
-flexbox), un rendu responsive qui ne déforme jamais l'image source ni ne fait déborder un texte de
-longueur variable."""
+Rendu HTML/CSS (Jinja2) via Chromium headless (Playwright) — choisi plutôt qu'une composition
+raster (Pillow) pour obtenir gratuitement, via CSS (`object-fit: cover`, flexbox), un rendu
+responsive qui ne déforme jamais l'image source ni ne fait déborder un texte de longueur
+variable."""
 
 from __future__ import annotations
 
@@ -17,9 +20,6 @@ import jinja2
 from playwright.sync_api import Browser, sync_playwright
 
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
-
-_VIEWPORT_WIDTH = 1080
-_VIEWPORT_HEIGHT = 1920  # 9:16 — format vertical standard TikTok/Reels/Stories.
 
 # Paliers de taille du titre par longueur de texte, calculés en Python plutôt qu'en CSS pur
 # (clamp() seul ne suffirait pas à garantir un titre qui tient toujours en 2-3 lignes, cahier
@@ -73,20 +73,23 @@ def build_html(
 
 
 class SocialVisualRenderer:
-    """Wrapper Playwright — un seul navigateur Chromium lancé pour tout un batch d'articles (le
-    coût de lancement d'un navigateur par article serait disproportionné vu le volume).
+    """Wrapper Playwright — un seul navigateur Chromium lancé pour tout un batch d'articles ET
+    pour tous les gabarits (le coût de lancement d'un navigateur par rendu serait disproportionné
+    vu le volume). Le gabarit et ses dimensions sont précisés à chaque appel de `render()`, pas à
+    la construction — un seul renderer sert aussi bien le format TikTok/Reels que le format
+    Instagram dans le même batch.
 
     Usage :
-        with SocialVisualRenderer(template_path) as renderer:
+        with SocialVisualRenderer() as renderer:
             for article in articles:
                 png_bytes = renderer.render(
+                    template_path=..., width=..., height=...,
                     image_bytes=..., headline=..., key_points=..., category_label=...,
                     formatted_date=...,
                 )
     """
 
-    def __init__(self, template_path: Path) -> None:
-        self._template_path = template_path
+    def __init__(self) -> None:
         self._playwright = None
         self._browser: Browser | None = None
 
@@ -104,6 +107,9 @@ class SocialVisualRenderer:
     def render(
         self,
         *,
+        template_path: Path,
+        width: int,
+        height: int,
         image_bytes: bytes,
         headline: str,
         key_points: list[str],
@@ -112,16 +118,14 @@ class SocialVisualRenderer:
     ) -> bytes:
         assert self._browser is not None, "SocialVisualRenderer doit être utilisé via `with`."
         html = build_html(
-            self._template_path,
+            template_path,
             image_bytes=image_bytes,
             headline=headline,
             key_points=key_points,
             category_label=category_label,
             formatted_date=formatted_date,
         )
-        page = self._browser.new_page(
-            viewport={"width": _VIEWPORT_WIDTH, "height": _VIEWPORT_HEIGHT}
-        )
+        page = self._browser.new_page(viewport={"width": width, "height": height})
         try:
             page.set_content(html, wait_until="load")
             return page.screenshot()

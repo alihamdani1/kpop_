@@ -1,9 +1,14 @@
-"""Orchestration du visuel social 9:16 (RSS image + titre -> PNG -> Discord). Séparé de
+"""Orchestration des visuels sociaux (RSS image + titre -> PNG -> Discord). Séparé de
 `pipeline.py`, même principe que `thread_pipeline.py` : cadence et dépendances (Chromium via
 Playwright) totalement différentes du cycle articles existant, aucun risque de régression sur
 `run_cycle` déjà en production. Aucun appel Gemini ici — ce module ne fait que lire des champs
 déjà calculés par `run_cycle` (`headline_fr`/`key_points_fr`, rédigés ensemble par le 3e appel
-`SocialVisualContent`, voir analyzer.py/pipeline.py) et rendre/envoyer le visuel.
+`SocialVisualContent`, voir analyzer.py/pipeline.py) et rendre/envoyer les visuels.
+
+Deux formats générés et envoyés pour chaque article, même image/texte source, même salon Discord
+(pas de webhook séparé) : `templates/social_post.html` (9:16, TikTok/Reels/Stories) et
+`templates/social_post_instagram.html` (4:5, publication de feed) — voir
+`_TIKTOK_DIMENSIONS`/`_INSTAGRAM_DIMENSIONS`.
 
 Texte affiché : `headline_fr` en titre, `key_points_fr` en points clés — rédigés ENSEMBLE par un
 appel dédié pour garantir qu'ils se complètent sans se répéter, pour TOUTE route retenue (A, B,
@@ -25,6 +30,9 @@ from kpop_bot.models import ArticleRecord, TweetTag, determine_tweet_tag
 from kpop_bot.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+_TIKTOK_DIMENSIONS = (1080, 1920)  # 9:16 — TikTok/Reels/Stories
+_INSTAGRAM_DIMENSIONS = (1080, 1350)  # 4:5 — publication de feed
 
 _MOIS_FR = [
     "janvier",
@@ -160,7 +168,7 @@ def run_social_visuals(settings: Settings, *, dry_run: bool = False) -> SocialVi
             return stats
 
         with (
-            visual_generator.SocialVisualRenderer(settings.social_visual_template_path) as renderer,
+            visual_generator.SocialVisualRenderer() as renderer,
             tempfile.TemporaryDirectory() as tmp_dir,
         ):
             index = 0
@@ -175,13 +183,33 @@ def run_social_visuals(settings: Settings, *, dry_run: bool = False) -> SocialVi
                     stats.skipped_no_image += 1
                     continue
 
+                headline = _headline_text(article)
+                key_points = _key_points(article)
+                category_label = _category_label(article)
+                formatted_date = _format_date_fr(article.published_at)
+
                 try:
-                    png_bytes = renderer.render(
+                    tiktok_width, tiktok_height = _TIKTOK_DIMENSIONS
+                    tiktok_png = renderer.render(
+                        template_path=settings.social_visual_template_path,
+                        width=tiktok_width,
+                        height=tiktok_height,
                         image_bytes=image_bytes,
-                        headline=_headline_text(article),
-                        key_points=_key_points(article),
-                        category_label=_category_label(article),
-                        formatted_date=_format_date_fr(article.published_at),
+                        headline=headline,
+                        key_points=key_points,
+                        category_label=category_label,
+                        formatted_date=formatted_date,
+                    )
+                    instagram_width, instagram_height = _INSTAGRAM_DIMENSIONS
+                    instagram_png = renderer.render(
+                        template_path=settings.social_visual_instagram_template_path,
+                        width=instagram_width,
+                        height=instagram_height,
+                        image_bytes=image_bytes,
+                        headline=headline,
+                        key_points=key_points,
+                        category_label=category_label,
+                        formatted_date=formatted_date,
                     )
                 except Exception as exc:  # bonus non bloquant — jamais fatal pour le run
                     logger.warning("Échec de rendu du visuel pour %s : %s", article.url, exc)
@@ -189,12 +217,15 @@ def run_social_visuals(settings: Settings, *, dry_run: bool = False) -> SocialVi
                     continue
 
                 index += 1
-                tmp_path = Path(tmp_dir) / f"visual_{article.id}.png"
-                tmp_path.write_bytes(png_bytes)
+                tiktok_path = Path(tmp_dir) / f"visual_{article.id}_tiktok.png"
+                instagram_path = Path(tmp_dir) / f"visual_{article.id}_instagram.png"
+                tiktok_path.write_bytes(tiktok_png)
+                instagram_path.write_bytes(instagram_png)
                 try:
                     notifier.notify_social_visual(
                         article,
-                        tmp_path,
+                        tiktok_path,
+                        instagram_path,
                         url=settings.discord_webhook_social,
                         timeout=settings.request_timeout_seconds,
                         index=index,

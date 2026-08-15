@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    /* Format publication Instagram (feed), portrait 4:5 — même identité visuelle que le
+       gabarit TikTok/Reels (templates/social_post.html : badge, fond flouté + image nette,
+       logo, CTA) mais sans ses zones de sécurité spécifiques (pas d'icônes/pseudo superposés
+       sur une publication de feed, contrairement à un Reel/Story) et des proportions/tailles
+       adaptées à un canvas nettement plus court. */
+    body {
+      width: 1080px;
+      height: 1350px;
+      background-color: #121212;
+      font-family: 'Inter', sans-serif;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* --- 1. ZONE SUPÉRIEURE : L'IMAGE & LOGO --- */
+    .top-section {
+      position: relative;
+      width: 100%;
+      height: 620px; /* ~46% de la hauteur, même proportion que le gabarit TikTok */
+      background-color: #1a1a1a;
+      overflow: hidden;
+    }
+
+    .image-backdrop {
+      position: absolute;
+      inset: 0;
+      background-size: cover;
+      background-position: center;
+      filter: blur(32px) brightness(0.55);
+      transform: scale(1.15);
+    }
+
+    .image-foreground {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      height: 100%;
+      object-fit: contain; /* image source toujours affichée en entier, jamais rognée */
+    }
+
+    .image-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 170px;
+      background: linear-gradient(to top, rgba(0, 0, 0, 0.75), transparent);
+    }
+
+    .brand-logo {
+      position: absolute;
+      bottom: 26px;
+      left: 48px;
+      font-size: 78px;
+      font-weight: 900;
+      color: #ffffff;
+      letter-spacing: -1px;
+      line-height: 1;
+      text-shadow: 0 3px 14px rgba(0, 0, 0, 0.6);
+      z-index: 10;
+    }
+
+    /* --- 2. ZONE INFÉRIEURE : FOND JAUNE & CONTENU --- */
+    .bottom-section {
+      position: relative;
+      width: 100%;
+      flex: 1;
+      background-color: #FFD43F;
+      color: #000000;
+      /* Padding modeste — pas de zone de sécurité TikTok à respecter ici, juste une bonne
+         aération visuelle. */
+      padding: 40px 56px 48px 56px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .cut-corner {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 0;
+      height: 0;
+      border-style: solid;
+      border-width: 0 70px 70px 0;
+      border-color: transparent #1a1a1a transparent transparent;
+    }
+
+    /* Pas de plafond de largeur type "zone de sécurité" ici (pas d'icônes superposées sur une
+       publication de feed) — le texte peut utiliser toute la largeur disponible. */
+    .main-content {
+      width: 100%;
+    }
+
+    .category-badge {
+      display: inline-block;
+      background-color: #000000;
+      color: #ffffff;
+      font-size: 42px;
+      font-weight: 900;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 10px 22px;
+      margin-bottom: 18px;
+    }
+
+    .headline {
+      font-weight: 900;
+      text-transform: uppercase;
+      line-height: 1.15;
+      letter-spacing: -1px;
+      color: #000000;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    /* Mêmes paliers Python (visual_generator._font_size_class) que le gabarit TikTok, valeurs
+       en pixels recalibrées pour ce canvas plus court. */
+    .headline.text-lg { font-size: 60px; }
+    .headline.text-md { font-size: 50px; }
+    .headline.text-sm { font-size: 42px; }
+
+    .timestamp {
+      margin-top: 16px;
+      font-size: 22px;
+      font-weight: 600;
+      color: rgba(0, 0, 0, 0.65);
+    }
+
+    .key-points {
+      list-style: none;
+      margin-top: 20px;
+    }
+
+    .key-points li {
+      font-size: 26px;
+      font-weight: 700;
+      line-height: 1.3;
+      margin-bottom: 8px;
+      padding-left: 30px;
+      position: relative;
+    }
+
+    .key-points li::before {
+      content: "•";
+      position: absolute;
+      left: 0;
+      color: #000000;
+    }
+
+    .footer-cta {
+      text-align: center;
+      font-size: 24px;
+      font-weight: 800;
+      color: #000000;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- PARTIE HAUTE : IMAGE ET MARQUE -->
+  <div class="top-section">
+    <div class="image-backdrop" style="background-image: url({{ image_data_uri }});"></div>
+    <img class="image-foreground" src="{{ image_data_uri }}" alt="">
+    <div class="image-overlay"></div>
+    <div class="brand-logo">RUAN!</div>
+  </div>
+
+  <!-- PARTIE BASSE : CONTENU JAUNE -->
+  <div class="bottom-section">
+    <div class="cut-corner"></div>
+
+    <div class="main-content">
+      <div class="category-badge">{{ category_label }}</div>
+      <div class="headline {{ headline_size_class }}">{{ headline }}</div>
+      <div class="timestamp">{{ formatted_date }}</div>
+      {% if key_points %}
+      <ul class="key-points">
+        {% for point in key_points %}
+        <li>{{ point }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+
+    <div class="footer-cta">Abonnez-vous à RUAN! pour plus d'actualités K-pop</div>
+  </div>
+
+</body>
+</html>

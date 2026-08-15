@@ -21,13 +21,16 @@ from kpop_bot.notifier import (
     NotificationError,
     build_embed,
     build_info_header,
+    build_instagram_visual_label,
     build_review_message,
+    build_social_visual_header,
     build_thread_intro_message,
     build_thread_selection_embed,
     build_thread_tweet_header,
     build_tweet_header,
     notify,
     notify_review,
+    notify_social_visual,
     notify_thread,
     notify_thread_selection,
     send_embed,
@@ -197,6 +200,41 @@ def test_notify_review_envoie_un_seul_message(make_article):
     article = make_article(category=Category.BRUIT_INUTILE, importance=Importance.MINEUR)
     notify_review(article, url=url, timeout=5.0)
     assert route.call_count == 1
+
+
+# --- Visuels sociaux : deux formats par article (TikTok/Reels 9:16 + publication Instagram
+# 4:5), même salon, voir social_pipeline.py/visual_generator.py. ---
+
+
+def test_build_social_visual_header_numerote():
+    assert build_social_visual_header(1) == "# Post 1"
+
+
+def test_build_instagram_visual_label_est_fixe():
+    assert build_instagram_visual_label() == "Format publication Instagram (4:5)"
+
+
+@respx.mock
+def test_notify_social_visual_envoie_les_deux_formats_dans_l_ordre(make_article, tmp_path):
+    url = "https://discord.com/api/webhooks/fake/social"
+    mock = respx.post(url).mock(return_value=httpx.Response(204))
+    tiktok_image = tmp_path / "tiktok.png"
+    tiktok_image.write_bytes(b"tiktok-bytes")
+    instagram_image = tmp_path / "instagram.png"
+    instagram_image.write_bytes(b"instagram-bytes")
+
+    article = make_article(tweet_draft="Le tweet à copier-coller.")
+    notify_social_visual(article, tiktok_image, instagram_image, url=url, timeout=5.0, index=1)
+
+    assert mock.call_count == 3
+    bodies_raw = [call.request.content for call in mock.calls]
+    assert json.loads(bodies_raw[0]) == {"content": "# Post 1"}
+    assert mock.calls[1].request.headers["content-type"].startswith("multipart/form-data")
+    assert b"Le tweet \xc3\xa0 copier-coller." in bodies_raw[1]
+    assert b"tiktok-bytes" in bodies_raw[1]
+    assert mock.calls[2].request.headers["content-type"].startswith("multipart/form-data")
+    assert b"Format publication Instagram (4:5)" in bodies_raw[2]
+    assert b"instagram-bytes" in bodies_raw[2]
 
 
 # --- Threads Twitter quotidiens (T15) : picker (webhook + réactions bot) et diffusion finale. ---

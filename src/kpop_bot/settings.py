@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     # run_cycle, voir pipeline.py), comportement du reste du pipeline strictement inchangé. ---
     discord_webhook_social: str | None = None
     social_visual_template_path: Path = Path("templates/social_post.html")
+    # Format publication Instagram (4:5, feed) — même news, même image source, gabarit distinct
+    # (pas de zone de sécurité TikTok/Reels, proportions différentes). Envoyé automatiquement en
+    # plus du format TikTok/Reels dès que discord_webhook_social est configuré, vers le même
+    # salon — pas un webhook séparé.
+    social_visual_instagram_template_path: Path = Path("templates/social_post_instagram.html")
     # Borne le temps d'un run (lancement Chromium + téléchargements d'images RSS).
     social_visual_batch_limit: int = 20
 

@@ -1241,6 +1241,51 @@ envoyé et vérifié visuellement.
 
 ---
 
+### ✅ T20 — Second format de visuel : publication Instagram (4:5), en plus du format TikTok/Reels (9:16) — FAIT
+
+**Origine** : demande explicite de l'utilisateur après validation de T19 — envoyer, pour chaque
+article, **les deux formats côte à côte** sur le même salon Discord (pas de nouveau webhook),
+plutôt que le seul format vertical 9:16 pensé pour TikTok/Reels/Stories, pour couvrir aussi la
+publication de feed Instagram classique.
+
+**Format choisi** : portrait 4:5 (1080×1350) — format recommandé par Instagram pour maximiser
+l'espace occupé dans le feed, plutôt qu'un carré 1:1 ou un 9:16 identique au premier format.
+
+**Décision de contenu** : même texte que le format TikTok — `headline_fr`/`key_points_fr`
+calculés **une seule fois** par article (`_headline_text`/`_key_points`/`_category_label`/
+`_format_date_fr` appelés une fois, réutilisés pour les deux rendus) — les deux images
+représentent la même actu, aucune raison de diverger, et ça évite tout risque d'incohérence
+entre les deux formats.
+
+**Différence de gabarit** : contrairement à `social_post.html` (T19), `social_post_instagram.html`
+n'a **aucune zone de sécurité TikTok** (pas de `max-width` sur `.main-content`, marge basse
+modeste `padding: 40px 56px 48px 56px`) — une publication de feed Instagram n'a pas de légende ni
+de boutons d'interaction superposés à l'image, contrairement à TikTok/Reels. Même langage visuel
+sinon (badge catégorie, titre MAJUSCULES gras, puces, CTA).
+
+**Refactor nécessaire** (`visual_generator.py`) : `SocialVisualRenderer` ne prenait jusque-là
+qu'un seul `template_path` (fixé à la construction) — devenu un paramètre de `render()` avec
+`width`/`height`, pour permettre d'appeler le même navigateur Chromium (un seul lancé pour tout
+le batch, coût de lancement non négligeable) avec deux gabarits différents sans le relancer.
+
+**Fichiers concernés** : `templates/social_post_instagram.html` (nouveau gabarit),
+`visual_generator.py` (`render()` prend `template_path`/`width`/`height`), `settings.py`
+(`social_visual_instagram_template_path`), `notifier.py` (`notify_social_visual()` envoie
+désormais 3 messages : en-tête, tweet + image TikTok, `build_instagram_visual_label()` + image
+Instagram), `social_pipeline.py` (`_TIKTOK_DIMENSIONS`/`_INSTAGRAM_DIMENSIONS`, deux appels à
+`renderer.render()` par article, deux fichiers temporaires écrits avant l'envoi).
+
+**Fait quand** : tests sur le nouveau gabarit (`test_visual_generator.py`), sur les deux appels
+de rendu par article et le format des noms de fichiers temporaires (`test_social_pipeline.py`),
+sur les 3 messages Discord dans l'ordre attendu (`test_notifier.py`) — 290 tests au vert, `ruff`
+propre. **✔️ Vérifié en conditions réelles** : `social_visual_sent_at` réinitialisé sur un
+article réel déjà traité par le 3e appel Gemini (`prompt_version=v5`, titre et points clés
+propres), `python -m kpop_bot social-visuals` exécuté pour de vrai — 3 messages reçus sur le
+salon Discord privé (en-tête, image TikTok 9:16, image Instagram 4:5), rendu visuel confirmé par
+l'utilisateur.
+
+---
+
 ## Ordre d'exécution — où on en est
 
 ```

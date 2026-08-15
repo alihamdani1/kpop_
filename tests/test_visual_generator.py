@@ -9,6 +9,9 @@ import respx
 from kpop_bot import visual_generator
 
 _TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "social_post.html"
+_INSTAGRAM_TEMPLATE_PATH = (
+    Path(__file__).resolve().parent.parent / "templates" / "social_post_instagram.html"
+)
 
 
 def test_font_size_class_texte_court():
@@ -127,3 +130,28 @@ def test_download_image_none_si_erreur_reseau():
 def test_template_existe_et_est_lisible():
     assert _TEMPLATE_PATH.exists()
     assert _TEMPLATE_PATH.read_text(encoding="utf-8")
+
+
+# --- Gabarit Instagram (4:5, publication de feed) — même moteur de rendu, gabarit distinct. ---
+
+
+def test_template_instagram_existe_et_est_lisible():
+    assert _INSTAGRAM_TEMPLATE_PATH.exists()
+    assert _INSTAGRAM_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+
+def test_build_html_fonctionne_avec_le_gabarit_instagram():
+    html = visual_generator.build_html(
+        _INSTAGRAM_TEMPLATE_PATH,
+        image_bytes=b"fake-image-bytes",
+        headline="Un titre de test",
+        key_points=["Premier point.", "Deuxième point."],
+        category_label="RELEASE",
+        formatted_date="14 août 2026",
+    )
+    encoded = base64.b64encode(b"fake-image-bytes").decode("ascii")
+    assert f"data:image/jpeg;base64,{encoded}" in html
+    assert "Un titre de test" in html
+    assert "Premier point." in html
+    assert "width: 1080px" in html
+    assert "height: 1350px" in html
