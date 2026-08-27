@@ -99,3 +99,18 @@ sources:
     # 10/08/2026.
     url: https://www.google.com/alerts/feeds/00938253182511072888/8904788714871185417
     active: true
+
+  - name: Google Alerts - D Awards 2027
+    # D Awards 2027 (15-16/01/2027, Plénitude Arena, ex-Paris La Défense Arena) — première
+    # cérémonie K-pop en Europe. Alerte dédiée pour capter lineup, billetterie et annonces
+    # au plus tôt, en complément de Soompi/Koreaboo (qui couvrent la cérémonie mais avec le
+    # délai d'un article) et de l'alerte "Kpop France" (qui exige "k-pop" ET un mot-clé
+    # France dans le même texte). Requête : "D Awards" (2027 OR Paris OR kpop OR "k-pop" OR
+    # Dispatch OR "Plénitude Arena" OR "Plenitude Arena" OR "La Défense Arena"), mêmes
+    # réglages que les deux alertes ci-dessus (au fur et à mesure, toutes langues, tous les
+    # résultats, flux RSS). Côté routage, "D Awards" et les noms de la salle ont été ajoutés
+    # à france_keywords (settings.py) le 27/08/2026 : ces articles sont forcés en route
+    # CONCERT. Flux Atom valide (HTTP 200), vide au moment de l'ajout — normal, comme pour
+    # les deux précédentes. Vérifié manuellement le 27/08/2026.
+    url: https://www.google.com/alerts/feeds/00938253182511072888/18059476041361518788
+    active: true

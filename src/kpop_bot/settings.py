@@ -73,6 +73,17 @@ class Settings(BaseSettings):
         "Olympia",
         "Élysée Montmartre",
         "Bataclan",
+        # Ajout 27/08/2026 — D Awards 2027 (15-16/01/2027), première cérémonie K-pop en
+        # Europe, à la Plénitude Arena (ex-Paris La Défense Arena). "D Awards" comme mot-clé
+        # France est volontaire : tant que l'édition annoncée est parisienne, tout article
+        # sur la cérémonie relève de la route CONCERT. À retirer si une édition ultérieure
+        # quitte la France. Les deux noms de la salle couvrent les articles qui ne citeraient
+        # ni "Paris" ni "France".
+        "D Awards",
+        "Plénitude Arena",
+        "Plenitude Arena",
+        "La Défense Arena",
+        "La Defense Arena",
     ]
 
     # Filet de sécurité record/palier viral — voir T13. Déclenché seulement si un de ces
